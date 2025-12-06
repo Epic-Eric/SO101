@@ -1,0 +1,7 @@
+data_dir: "./data"
+session_name: "test_session"
+out_dir: "output/artifacts"
+epochs: 20
+batch_size: 128
+lr: 0.002
+latent_dim: 128

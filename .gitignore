@@ -1,0 +1,16 @@
+# Ignore folders
+.vscode/
+__pycache__/
+
+# Ignore outputs but keep empty.txt
+outputs/*
+!outputs/
+!outputs/empty.txt
+
+# Ignore data but keep empty.txt and src/data
+data/*
+!data/
+!data/empty.txt
+!src/data/
+
+.env
