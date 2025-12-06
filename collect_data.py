@@ -6,3 +6,4 @@ result = collect_images_with_teleoperation(
     show_window=True,
 )
 print(result.metadata)
+
