@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "robot-model"
+version = "0.1.0"
+description = "VAE training + data tools for SO101 projects"
+authors = [{ name = "ericx" }]
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Proprietary" }
+dependencies = [
+  "torch",
+  "torchvision",
+  "numpy",
+  "pillow",
+  "matplotlib",
+  "python-dotenv",
+  "PyYAML",
+  "opencv-python",
+]
+
+[project.scripts]
+train-model = "model.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["model*", "model/*"]

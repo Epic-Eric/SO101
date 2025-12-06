@@ -18,8 +18,8 @@ def main():
 
     args = parser.parse_args()
 
-    # Load defaults from config..yml if present
-    cfg_path = os.path.join(os.getcwd(), "config..yml")
+    # Load defaults from config.yml if present
+    cfg_path = os.path.join(os.getcwd(), "config.yml")
     cfg = load_yaml_config(cfg_path)
 
     data_dir = args.data_dir or cfg.get("data_dir")
@@ -30,11 +30,11 @@ def main():
     latent_dim = args.latent_dim if args.latent_dim is not None else cfg.get("latent_dim", 128)
 
     if not data_dir:
-        raise SystemExit("data_dir is required (pass arg or set in config..yml)")
+        raise SystemExit("data_dir is required (pass arg or set in config.yml)")
     if not os.path.isdir(data_dir):
         raise SystemExit(f"data_dir not found: {data_dir}")
     if not out_dir:
-        raise SystemExit("out_dir is required (pass arg or set in config..yml)")
+        raise SystemExit("out_dir is required (pass arg or set in config.yml)")
     os.makedirs(out_dir, exist_ok=True)
 
     device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"

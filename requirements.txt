@@ -1,0 +1,13 @@
+# Core ML + vision
+torch
+torchvision
+numpy
+pillow
+matplotlib
+
+# IO and utils
+python-dotenv
+PyYAML
+
+# Camera/display for data collection
+opencv-python
