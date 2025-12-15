@@ -59,23 +59,42 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
     """Load metrics from metrics.json if present and return list of EpochMetrics."""
     path = os.path.join(out_dir, "metrics.json")
     out: List[EpochMetrics] = []
-    if not os.path.exists(path):
-        return out
-    try:
-        with open(path, "r") as f:
-            rows = json.load(f)
-        for r in rows:
-            out.append(
-                EpochMetrics(
-                    epoch=int(r.get("epoch")),
-                    loss=float(r.get("loss")),
-                    rec_loss=float(r.get("rec_loss")),
-                    kld=float(r.get("kld")),
-                    val_loss=(float(r.get("val_loss")) if r.get("val_loss") is not None else None),
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                rows = json.load(f)
+            for r in rows:
+                out.append(
+                    EpochMetrics(
+                        epoch=int(r.get("epoch")),
+                        loss=float(r.get("loss")),
+                        rec_loss=float(r.get("rec_loss")),
+                        kld=float(r.get("kld")),
+                        val_loss=(float(r.get("val_loss")) if r.get("val_loss") is not None else None),
+                    )
                 )
-            )
-    except Exception:
-        return []
+        except Exception:
+            return []
+        return out
+
+    # Fallback: if metrics.json missing but metrics.csv exists, load CSV to preserve continuity
+    csv_path = os.path.join(out_dir, "metrics.csv")
+    if os.path.exists(csv_path):
+        try:
+            with open(csv_path, "r") as f:
+                hdr = f.readline()
+                for line in f:
+                    parts = line.strip().split(",")
+                    if len(parts) < 4:
+                        continue
+                    epoch = int(parts[0])
+                    loss = float(parts[1])
+                    rec_loss = float(parts[2])
+                    kld = float(parts[3])
+                    val_loss = float(parts[4]) if len(parts) > 4 and parts[4] != "" else None
+                    out.append(EpochMetrics(epoch=epoch, loss=loss, rec_loss=rec_loss, kld=kld, val_loss=val_loss))
+        except Exception:
+            return []
     return out
 
 
@@ -94,7 +113,8 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
         metrics.append(metric)
     # Sort by epoch
     metrics.sort(key=lambda x: x.epoch)
-    # Write JSON
+
+    # Write JSON (full rewrite - authoritative)
     rows = [
         {
             "epoch": m.epoch,
@@ -107,11 +127,28 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
     ]
     with open(os.path.join(out_dir, "metrics.json"), "w") as f:
         json.dump(rows, f, indent=2)
-    # Rewrite CSV
-    with open(os.path.join(out_dir, "metrics.csv"), "w") as f:
-        f.write("epoch,loss,rec_loss,kld\n")
-        for r in rows:
-            f.write(f"{r['epoch']},{r['loss']},{r['rec_loss']},{r['kld']}\n")
+
+    # For CSV, prefer append when adding a new epoch so we don't clobber existing CSV on resume.
+    csv_path = os.path.join(out_dir, "metrics.csv")
+    header = "epoch,loss,rec_loss,kld,val_loss\n"
+    if not os.path.exists(csv_path):
+        # write full CSV with header
+        with open(csv_path, "w") as f:
+            f.write(header)
+            for r in rows:
+                f.write(f"{r['epoch']},{r['loss']},{r['rec_loss']},{r['kld']},{'' if r['val_loss'] is None else r['val_loss']}\n")
+    else:
+        # If we replaced an existing epoch, rewrite full CSV to ensure consistency.
+        if replaced:
+            with open(csv_path, "w") as f:
+                f.write(header)
+                for r in rows:
+                    f.write(f"{r['epoch']},{r['loss']},{r['rec_loss']},{r['kld']},{'' if r['val_loss'] is None else r['val_loss']}\n")
+        else:
+            # append just the new row
+            r = rows[-1]
+            with open(csv_path, "a") as f:
+                f.write(f"{r['epoch']},{r['loss']},{r['rec_loss']},{r['kld']},{'' if r['val_loss'] is None else r['val_loss']}\n")
 
 
 def save_checkpoint(out_dir: str, ckpt: Checkpoint, metadata: Optional[Dict] = None, filename: Optional[str] = None) -> str:
