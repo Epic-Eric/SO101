@@ -12,6 +12,7 @@ from model.src.models.vae import VAE
 from model.src.interfaces.training import EpochMetrics, TrainingSummary, Checkpoint
 from model.src.interfaces.dataset import ImageFolder64Dataset
 from model.src.utils.normalization import get_default_normalization, denormalize
+from model.src.data.augmentation import cutmix, mixup
 from model.src.utils.saving import (
     save_epoch_metrics,
     append_epoch_metric,
@@ -39,6 +40,8 @@ def train(
     latent_dim: int = 128,
     val_split: float = 0.1,
     device: str | torch.device = "auto",
+    augment: str | None = "cutmix",
+    augment_alpha: float = 1.0,
 ):
     if device == "auto":
         device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
@@ -221,9 +224,21 @@ def train(
 
         for batch in tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False):
             batch = batch.to(device)
+
+            # Optionally apply augmentation (CutMix / MixUp) to inputs. For VAE training
+            # we mix the images themselves and use the mixed images as both inputs and targets.
+            if augment == "cutmix":
+                mixed, _, _, lam = cutmix(batch, batch, alpha=augment_alpha, device=device)
+                batch_aug = mixed
+            elif augment == "mixup":
+                mixed, _, _, lam = mixup(batch, batch, alpha=augment_alpha, device=device)
+                batch_aug = mixed
+            else:
+                batch_aug = batch
+
             optimizer.zero_grad()
-            x_rec, mu, logvar = vae(batch)
-            loss, rec_l, kld = vae.loss_fn(batch, x_rec, mu, logvar)
+            x_rec, mu, logvar = vae(batch_aug)
+            loss, rec_l, kld = vae.loss_fn(batch_aug, x_rec, mu, logvar)
             loss.backward()
             optimizer.step()
 
