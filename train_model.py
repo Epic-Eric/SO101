@@ -15,6 +15,14 @@ def main():
     parser.add_argument("--batch_size", type=int, default=None, help="Batch size")
     parser.add_argument("--lr", type=float, default=None, help="Learning rate")
     parser.add_argument("--latent_dim", type=int, default=None, help="Latent dimension")
+    parser.add_argument(
+        "--augment",
+        type=str,
+        default="cutmix",
+        choices=["cutmix", "mixup", "none"],
+        help="Data augmentation to apply during training (cutmix, mixup, or none). Default: cutmix",
+    )
+    parser.add_argument("--augment-alpha", type=float, default=1.0, help="Alpha parameter for Beta distribution used by CutMix/MixUp")
 
     args = parser.parse_args()
 
@@ -50,6 +58,8 @@ def main():
         lr=lr,
         latent_dim=latent_dim,
         device=device,
+        augment=(None if args.augment == "none" else args.augment),
+        augment_alpha=args.augment_alpha,
     )
 
     print(f"Training complete. Final model saved to {final_model_path}")

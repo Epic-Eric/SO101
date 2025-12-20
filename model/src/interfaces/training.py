@@ -8,6 +8,8 @@ class EpochMetrics:
     loss: float
     rec_loss: float
     kld: float
+    # optional validation loss for this epoch
+    val_loss: Optional[float] = None
 
 
 @dataclass
