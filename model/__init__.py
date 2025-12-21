@@ -1,7 +1,18 @@
-"""
-Model project package root.
+"""Model project package root.
 
-Provides higher-level imports for utilities, data collection, and interfaces.
+Keep this import-light: training and inference code may run in environments
+that do not have robot teleop dependencies or teleop interface files.
 """
 
-from .src.interfaces.teleop import TeleopSample, TeleopSessionResult  # re-export
+__all__ = []
+
+try:
+	from .src.interfaces.teleop import TeleopSample, TeleopSessionResult  # re-export
+
+	__all__ += [
+		"TeleopSample",
+		"TeleopSessionResult",
+	]
+except Exception:
+	# Teleop interfaces are optional for pure training usage.
+	pass
