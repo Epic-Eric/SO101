@@ -1,6 +1,12 @@
-from .teleop import TeleopSample, TeleopSessionResult
+__all__ = []
 
-__all__ = [
-    "TeleopSample",
-    "TeleopSessionResult",
-]
+try:
+    from .teleop import TeleopSample, TeleopSessionResult
+
+    __all__ += [
+        "TeleopSample",
+        "TeleopSessionResult",
+    ]
+except Exception:
+    # Teleop interfaces are optional in minimal/training-only installs.
+    pass

@@ -65,11 +65,11 @@ pyarrow==22.0.0
 pydantic==2.12.5
 pydantic_core==2.41.5
 pynput==1.8.1
-pyobjc-core==12.1
-pyobjc-framework-ApplicationServices==12.1
-pyobjc-framework-Cocoa==12.1
-pyobjc-framework-CoreText==12.1
-pyobjc-framework-Quartz==12.1
+pyobjc-core==12.1; sys_platform == "darwin"
+pyobjc-framework-ApplicationServices==12.1; sys_platform == "darwin"
+pyobjc-framework-Cocoa==12.1; sys_platform == "darwin"
+pyobjc-framework-CoreText==12.1; sys_platform == "darwin"
+pyobjc-framework-Quartz==12.1; sys_platform == "darwin"
 pyparsing==3.2.5
 pyserial==3.5
 python-dateutil==2.9.0.post0
@@ -80,7 +80,6 @@ pyyaml-include==1.4.1
 regex==2025.11.3
 requests==2.32.5
 rerun-sdk==0.26.2
-robot-model @ ./model
 safetensors==0.7.0
 sentry-sdk==2.47.0
 six==1.17.0
