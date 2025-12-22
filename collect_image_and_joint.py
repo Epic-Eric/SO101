@@ -8,6 +8,7 @@ from dotenv import load_dotenv, find_dotenv
 
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.robots.so101_follower import SO101FollowerConfig, SO101Follower
+from lerobot.teleoperators.so101_leader import SO101LeaderConfig, SO101Leader
 
 
 def _load_env() -> None:
@@ -131,5 +132,107 @@ def collect_synchronized_images_and_joints(
 
 
 if __name__ == "__main__":
-	collect_synchronized_images_and_joints()
+	# If LEADER_PORT is present, run teleop-follow + logging; else run passive logging
+	leader_port = os.environ.get("LEADER_PORT")
+	if leader_port:
+		# Teleop-follow mode
+		def collect_follow_and_log(
+			save_dir: str = "data/captured_images_and_joints",
+			camera_index: Optional[int] = None,
+			camera_fps: Optional[int] = None,
+			camera_width: Optional[int] = None,
+			camera_height: Optional[int] = None,
+			calibrate: bool = True,
+		) -> None:
+			_load_env()
+			follower_port = os.environ.get("FOLLOWER_PORT")
+			follower_id = os.environ.get("FOLLOWER_ID", "follower_arm")
+			leader_id = os.environ.get("LEADER_ID", "leader_arm")
+
+			assert follower_port is not None, "FOLLOWER_PORT must be set in environment"
+			assert leader_port is not None, "LEADER_PORT must be set in environment"
+
+			cam_index = int(os.environ.get("CAMERA_INDEX", camera_index if camera_index is not None else 0))
+			cam_fps = int(os.environ.get("CAMERA_FPS", camera_fps if camera_fps is not None else 30))
+			cam_width = int(os.environ.get("CAMERA_WIDTH", camera_width if camera_width is not None else 1920))
+			cam_height = int(os.environ.get("CAMERA_HEIGHT", camera_height if camera_height is not None else 1080))
+
+			camera_config = {
+				"front": OpenCVCameraConfig(index_or_path=cam_index, width=cam_width, height=cam_height, fps=cam_fps)
+			}
+
+			robot_config = SO101FollowerConfig(port=follower_port, id=follower_id, cameras=camera_config)  # type: ignore
+			teleop_config = SO101LeaderConfig(port=leader_port, id=leader_id)
+
+			robot = SO101Follower(robot_config)
+			teleop_device = SO101Leader(teleop_config)
+
+			# Output directory and manifest
+			out_dir = Path(save_dir)
+			out_dir.mkdir(parents=True, exist_ok=True)
+			joints_manifest_path = out_dir / "joints.jsonl"
+			joints_manifest = open(joints_manifest_path, "a", buffering=1)
+
+			teleop_device.connect(calibrate=calibrate)
+			robot.connect(calibrate=calibrate)
+			# Ensure torque is enabled for following
+			robot.bus.enable_torque()
+
+			frame_idx = 0
+			prev_joints: dict[str, float] | None = None
+			try:
+				while True:
+					# Get leader action and send to follower
+					action = teleop_device.get_action()
+					robot.send_action(action)
+
+					# Read observation (camera + joints) from follower
+					obs = robot.get_observation()
+					frame = obs.get("front")
+					if frame is None:
+						time.sleep(0.001)
+						continue
+
+					# Timestamp
+					ts = time.time()
+
+					# Save image (convert RGB -> BGR for OpenCV write) and display
+					bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+					img_name = f"frame_{frame_idx:06d}.jpg"
+					img_path = out_dir / img_name
+					cv2.imwrite(str(img_path), bgr)
+
+					cv2.imshow("Follower Camera (front)", bgr)
+					if cv2.waitKey(1) & 0xFF == ord("q"):
+						break
+
+					# Extract joint positions and compute deltas (same schema as passive)
+					joints = {k: float(v) for k, v in obs.items() if k.endswith(".pos")}
+					if prev_joints is None:
+						delta = {k: 0.0 for k in joints.keys()}
+					else:
+						delta = {k: joints.get(k, 0.0) - prev_joints.get(k, 0.0) for k in joints.keys()}
+
+					def _escape(s: str) -> str:
+						return s.replace("\\", "\\\\").replace("\"", "\\\"")
+
+					joints_items = ", ".join([f'"{_escape(k)}": {delta[k]:.6f}' for k in sorted(delta.keys())])
+					line = f'{{"t": {ts:.6f}, "image": "{_escape(img_name)}", "joints": {{{joints_items}}}}}\n'
+					joints_manifest.write(line)
+
+					frame_idx += 1
+					prev_joints = joints
+					time.sleep(0.001)
+			finally:
+				try:
+					joints_manifest.close()
+				finally:
+					teleop_device.disconnect()
+					robot.disconnect()
+					cv2.destroyAllWindows()
+
+		# Run
+		collect_follow_and_log()
+	else:
+		collect_synchronized_images_and_joints()
 
