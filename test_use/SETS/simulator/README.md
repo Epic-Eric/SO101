@@ -1,7 +1,7 @@
 # SO101 PyBullet Simulator
 
 This simulator loads the SO101 robot from `URDF_so101.urdf` into a PyBullet GUI and provides:
-- Joint control via keys 1..6 (reverse with Shift+1..6)
+- Joint control via GUI sliders (Joint 1..6)
 - Camera rotate: hold Shift and drag with left mouse (two-finger drag on trackpad)
 - Camera pan: hold Ctrl and drag with left mouse
 - Target point: adjust via sliders (Target X/Y/Z) and use the "Randomize Target" button (or press `R`) to randomize
@@ -15,11 +15,10 @@ conda activate lerobot
 python test_use/SETS/simulator/main.py
 ```
 
-## Keys
+## Controls
 
-- 1..6: move joints named "1".."6"
-- Shift+1..6: move in reverse
-- R: randomize target sphere within bounds
+- Joint 1..6 sliders: adjust motor angles directly
+- `R`: randomize target sphere within bounds
 
 ## Sliders
 
