@@ -18,6 +18,9 @@ data/*
 
 *.egg-info
 
+# simulator
+test_use/SETS/simulator/assets
+
 # Created by https://www.toptal.com/developers/gitignore/api/python,robotframework,vs
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,robotframework,vs
 
