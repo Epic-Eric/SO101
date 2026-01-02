@@ -11,6 +11,7 @@ from dotenv import load_dotenv, find_dotenv
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig
 from lerobot.robots.so101_follower import SO101FollowerConfig, SO101Follower
 from lerobot.teleoperators.so101_leader import SO101LeaderConfig, SO101Leader
+from lerobot.teleoperators.so101_leader import SO101LeaderConfig, SO101Leader
 
 
 def _load_env() -> None:
