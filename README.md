@@ -130,7 +130,7 @@ python run_app.py world_collect   # World-model data collection UI
 
 **1) Collect synchronized images + joints**
 
-- Set hardware env vars (e.g., `export FOLLOWER_PORT=/dev/ttyUSB0`, optional `export LEADER_PORT=/dev/ttyUSB1` for teleop-follow).
+- Set hardware env vars (e.g., `export FOLLOWER_PORT=/dev/ttyUSB0`, optional `export LEADER_PORT=/dev/ttyUSB1` for teleop follow mode).
 - Run:
   
   ```bash
@@ -144,9 +144,7 @@ python run_app.py world_collect   # World-model data collection UI
 python train_world_model.py data/captured_images_and_joints ./output --seq_len 16 --image_size 64
 ```
 
-Arguments fall back to `config.yml`:
-- `data_dir` / `out_dir` default to `world_data_dir` / `world_out_dir` (or `data_dir` / `out_dir` if set).
-- Hyperparameters honor `world_*` overrides such as `world_epochs`, `world_batch_size`, `world_lr`, and `world_latent_dim`.
+Arguments fall back to `config.yml`: `data_dir` defaults to `world_data_dir` (or `data_dir` if `world_data_dir` is not set), `out_dir` defaults to `world_out_dir` (or `out_dir` if `world_out_dir` is not set), and hyperparameters honor `world_*` overrides such as `world_epochs`, `world_batch_size`, `world_lr`, and `world_latent_dim`.
 
 **3) Visualize rollouts / reconstructions**
 
