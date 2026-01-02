@@ -27,10 +27,10 @@ def _read_run_label(manifest_loader: Callable[[str], Optional[dict]], path: str)
     loader = manifest_loader or _default_manifest_loader
     try:
         meta = loader(path)
-        if isinstance(meta, dict):
-            return meta.get("run_name")
     except Exception:
-        return None
+        meta = None
+    if isinstance(meta, dict):
+        return meta.get("run_name")
     return None
 
 
@@ -58,7 +58,7 @@ def prepare_run_context(
             label = meta.get("run_name") if isinstance(meta, dict) else p
             mid = meta.get("model_id") if isinstance(meta, dict) else None
             ts = meta.get("timestamp") if isinstance(meta, dict) else None
-            print(f"[{i}] {p.split('/')[-1]} run_name={label} model_id={mid} ts={ts}")
+            print(f"[{i}] {os.path.basename(p)} run_name={label} model_id={mid} ts={ts}")
 
         choice = input(
             "Choose '[c] <index>' to continue, '[r] <index>' to rewrite (start new run), or 'n' for new run [n]: "
