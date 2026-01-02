@@ -124,13 +124,13 @@ python run_app.py reward_camera   # Red bead detector + teleop UI
 python run_app.py world_collect   # World-model data collection UI
 ```
 
-`run_app.py` automatically adds the repository root to `PYTHONPATH`, so absolute imports work regardless of where you launch the command.
+`run_app.py` automatically adds the repository root to `PYTHONPATH`, ensuring absolute imports work regardless of your current working directory when launching the command.
 
 ### World Model Workflow
 
 **1) Collect synchronized images + joints**
 
-- Set hardware env vars (e.g., `export FOLLOWER_PORT=/dev/ttyUSB0`; optional `export LEADER_PORT=/dev/ttyUSB1` for teleop follow mode).
+- Set hardware env vars (e.g., `export FOLLOWER_PORT=/dev/ttyUSB0`; optional `export LEADER_PORT=/dev/ttyUSB1` for teleoperation follow mode).
 - Run:
   
   ```bash
@@ -146,7 +146,7 @@ python train_world_model.py data/captured_images_and_joints ./output --seq_len 1
 
 Arguments fall back to `config.yml`:
 - `data_dir` uses `world_data_dir` from config.yml, falling back to the general `data_dir` if `world_data_dir` is not configured.
-- `out_dir` uses `world_out_dir`; if that key is missing, it uses the general `out_dir` value from config.yml.
+- `out_dir` uses `world_out_dir`; if `world_out_dir` is not configured, it uses the general `out_dir` value from config.yml.
 - Hyperparameters honor `world_*` overrides such as `world_epochs`, `world_batch_size`, `world_lr`, and `world_latent_dim`.
 
 **3) Visualize rollouts / reconstructions**
