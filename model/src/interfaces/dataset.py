@@ -46,7 +46,7 @@ class ImageFolder64Dataset(Dataset):
 
 
 class ImageJointSequenceDataset(Dataset):
-    """Sequence dataset backed by `joints.jsonl` + corresponding images.
+    """Episode-aware sequence dataset backed by `joints.jsonl` + corresponding images.
 
     Expected jsonl schema per line:
       {"t": <float>, "image": "frame_000123.jpg", "joints": {"joint_name": <float>, ...}}
@@ -84,55 +84,6 @@ class ImageJointSequenceDataset(Dataset):
         self._preload_images = bool(preload_images)
         self._preload_dtype = str(preload_dtype)
 
-        joints_path = os.path.join(root_dir, "joints.jsonl")
-        if not os.path.isfile(joints_path):
-            raise FileNotFoundError(f"joints.jsonl not found in {root_dir}")
-
-        records: List[Dict] = []
-        with open(joints_path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                img_name = rec.get("image")
-                joints = rec.get("joints")
-                if not isinstance(img_name, str) or not isinstance(joints, dict):
-                    continue
-                img_path = os.path.join(root_dir, img_name)
-                if not os.path.isfile(img_path):
-                    continue
-                records.append({"image": img_path, "joints": joints, "t": rec.get("t", None)})
-
-        if len(records) < self.seq_len:
-            raise ValueError(f"Not enough frames for seq_len={self.seq_len}: found {len(records)} valid records")
-
-        # Determine joint key order (sorted for stability)
-        first_joints = records[0]["joints"]
-        self.joint_keys = sorted(first_joints.keys())
-        self.action_dim = len(self.joint_keys)
-
-        # Build joint matrix
-        joints_mat = []
-        for rec in records:
-            j = rec["joints"]
-            joints_mat.append([float(j.get(k, 0.0)) for k in self.joint_keys])
-        self._joints = torch.tensor(joints_mat, dtype=torch.float32)
-        self._image_paths = [rec["image"] for rec in records]
-
-        # Precompute per-step actions (N-1, A)
-        if self.action_mode == "delta":
-            actions = self._joints[1:] - self._joints[:-1]
-        elif self.action_mode == "pos":
-            actions = self._joints[:-1]
-        else:
-            raise ValueError("action_mode must be 'delta' or 'pos'")
-
-        self._action_mean = actions.mean(dim=0)
-        self._action_std = actions.std(dim=0).clamp_min(eps)
         self._normalize_actions = bool(normalize_actions)
 
         # Image transforms
@@ -141,17 +92,190 @@ class ImageJointSequenceDataset(Dataset):
             t.append(transforms.Normalize(self.norm_params.mean, self.norm_params.std))
         self.transform = transforms.Compose(t)
 
-        # Optional: preload all transformed frames into RAM once.
-        # This is especially helpful on Colab when data is on Google Drive.
-        self._preloaded: Optional[torch.Tensor] = None
-        if self._preload_images:
-            dtype = torch.float16 if self._preload_dtype.lower() in ("float16", "fp16") else torch.float32
-            imgs_all: List[torch.Tensor] = []
-            for p in self._image_paths:
-                img = Image.open(p).convert("RGB")
-                imgs_all.append(self.transform(img).to(dtype=dtype))
-            # (N,C,H,W)
-            self._preloaded = torch.stack(imgs_all, dim=0)
+        def _discover_episode_dirs(root: str) -> List[str]:
+            """Return list of episode dirs containing joints.jsonl (root itself or subdirs)."""
+            if os.path.isfile(os.path.join(root, "joints.jsonl")):
+                return [root]
+            eps: List[str] = []
+            try:
+                for name in sorted(os.listdir(root)):
+                    cand = os.path.join(root, name)
+                    if os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "joints.jsonl")):
+                        eps.append(cand)
+            except FileNotFoundError:
+                pass
+            return eps
+
+        def _load_episode(ep_dir: str) -> Optional[Dict]:
+            """Load one episode folder."""
+            meta_joint_keys: Optional[List[str]] = None
+            meta_path = os.path.join(ep_dir, "meta.json")
+            if os.path.isfile(meta_path):
+                try:
+                    with open(meta_path, "r") as mf:
+                        meta_obj = json.load(mf)
+                    jk = meta_obj.get("joint_keys6") if isinstance(meta_obj, dict) else None
+                    if isinstance(jk, list) and len(jk) > 0:
+                        meta_joint_keys = [str(x) for x in jk][:6]
+                except Exception:
+                    meta_joint_keys = None
+
+            records: List[Dict] = []
+            joints_path = os.path.join(ep_dir, "joints.jsonl")
+            if not os.path.isfile(joints_path):
+                return None
+            with open(joints_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except Exception:
+                        continue
+                    img_name = rec.get("image")
+                    joints = rec.get("joints")
+                    if not isinstance(img_name, str) or not isinstance(joints, dict):
+                        continue
+                    img_path = os.path.join(ep_dir, img_name)
+                    if not os.path.isfile(img_path):
+                        continue
+                    action6 = rec.get("action6")
+                    if isinstance(action6, list):
+                        action6 = [float(x) for x in action6]
+                    else:
+                        action6 = None
+                    joints_delta = rec.get("joints_delta") if isinstance(rec, dict) else None
+                    records.append(
+                        {
+                            "image": img_path,
+                            "joints": joints,
+                            "t": rec.get("t", None),
+                            "action6": action6,
+                            "joints_delta": joints_delta if isinstance(joints_delta, dict) else None,
+                        }
+                    )
+
+            if len(records) < self.seq_len:
+                return None
+
+            # Determine joint key order
+            first_joints = records[0]["joints"]
+            joint_keys = meta_joint_keys or sorted(first_joints.keys())
+
+            action_vecs: List[List[float]] = []
+            action_dim: Optional[int] = None
+            if any(r.get("action6") is not None for r in records):
+                # Align actions with transitions: use action attached to arrival frame.
+                for r in records[1:]:
+                    vec = r.get("action6") or []
+                    if action_dim is None:
+                        action_dim = min(6, len(vec)) if len(vec) > 0 else 6
+                    padded = (list(vec) + [0.0] * 6)[: action_dim or 6]
+                    action_vecs.append([float(v) for v in padded])
+                if action_dim is None:
+                    action_dim = 6
+                action_source = "action6"
+            else:
+                action_dim = len(joint_keys)
+                action_source = self.action_mode
+                for i in range(1, len(records)):
+                    if self.action_mode == "delta":
+                        jd = records[i].get("joints_delta")
+                        if isinstance(jd, dict):
+                            vals = [float(jd.get(k, 0.0)) for k in joint_keys]
+                        else:
+                            prev = records[i - 1]["joints"]
+                            curr = records[i]["joints"]
+                            vals = [float(curr.get(k, 0.0)) - float(prev.get(k, 0.0)) for k in joint_keys]
+                    elif self.action_mode == "pos":
+                        prev = records[i - 1]["joints"]
+                        vals = [float(prev.get(k, 0.0)) for k in joint_keys]
+                    else:
+                        raise ValueError("action_mode must be 'delta' or 'pos'")
+                    action_vecs.append(vals)
+
+            actions = torch.tensor(action_vecs, dtype=torch.float32) if action_vecs else torch.zeros((0, action_dim))
+            image_paths = [r["image"] for r in records]
+
+            return {
+                "dir": ep_dir,
+                "joint_keys": joint_keys,
+                "action_dim": int(action_dim),
+                "actions": actions,
+                "image_paths": image_paths,
+                "records": records,
+                "action_source": action_source,
+            }
+
+        episode_dirs = _discover_episode_dirs(root_dir)
+        if not episode_dirs:
+            raise FileNotFoundError(f"joints.jsonl not found in {root_dir} or any immediate subdirectory")
+
+        self._episodes: List[Dict] = []
+        self.joint_keys: List[str] = []
+        self.action_dim: int = 0
+        self.num_episodes: int = 0
+        action_sum = None
+        action_sumsq = None
+        total_actions = 0
+
+        dtype = torch.float16 if self._preload_dtype.lower() in ("float16", "fp16") else torch.float32
+        self._preloaded: Optional[List[torch.Tensor]] = [] if self._preload_images else None
+
+        for ep_dir in episode_dirs:
+            ep = _load_episode(ep_dir)
+            if ep is None:
+                continue
+            if self.action_dim == 0:
+                self.action_dim = int(ep["action_dim"])
+                action_sum = torch.zeros(self.action_dim, dtype=torch.float32)
+                action_sumsq = torch.zeros(self.action_dim, dtype=torch.float32)
+            elif self.action_dim != int(ep["action_dim"]):
+                raise ValueError(f"Episode {ep_dir} has action_dim={ep['action_dim']} expected {self.action_dim}")
+
+            if not self.joint_keys:
+                self.joint_keys = list(ep["joint_keys"])
+            elif ep["joint_keys"] and list(ep["joint_keys"]) != self.joint_keys:
+                raise ValueError(f"Episode {ep_dir} joint keys differ from first episode")
+            self._episodes.append(ep)
+            self.num_episodes += 1
+
+            if ep["actions"].numel() > 0 and action_sum is not None and action_sumsq is not None:
+                total_actions += ep["actions"].shape[0]
+                action_sum += ep["actions"].sum(dim=0)
+                action_sumsq += (ep["actions"] ** 2).sum(dim=0)
+
+            if self._preloaded is not None:
+                imgs_all: List[torch.Tensor] = []
+                for p in ep["image_paths"]:
+                    img = Image.open(p).convert("RGB")
+                    imgs_all.append(self.transform(img).to(dtype=dtype))
+                self._preloaded.append(torch.stack(imgs_all, dim=0))
+
+        if not self._episodes:
+            raise ValueError(f"No valid episodes with at least seq_len={self.seq_len} found in {root_dir}")
+
+        if self._preloaded is not None and len(self._preloaded) == 0:
+            self._preloaded = None
+
+        if self._normalize_actions and total_actions > 0 and action_sum is not None and action_sumsq is not None:
+            self._action_mean = action_sum / float(total_actions)
+            var = (action_sumsq / float(total_actions)) - (self._action_mean ** 2)
+            self._action_std = torch.sqrt(var.clamp_min(eps))
+        else:
+            self._action_mean = torch.zeros(self.action_dim, dtype=torch.float32)
+            self._action_std = torch.ones(self.action_dim, dtype=torch.float32)
+
+        # Build mapping of dataset index -> (episode_idx, start_offset)
+        self._windows: List[Tuple[int, int]] = []
+        for epi, ep in enumerate(self._episodes):
+            max_start = len(ep["image_paths"]) - self.seq_len + 1
+            for start in range(max_start):
+                self._windows.append((epi, start))
+        if len(self._windows) == 0:
+            raise ValueError(f"No valid sequences of length {self.seq_len} found in dataset {root_dir}")
+
 
     def _get_image(self, path: str) -> torch.Tensor:
         if self._preloaded is not None:
@@ -175,30 +299,25 @@ class ImageJointSequenceDataset(Dataset):
         return t
 
     def __len__(self) -> int:
-        return len(self._image_paths) - self.seq_len + 1
+        return len(self._windows)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        start = int(idx)
+        epi, start = self._windows[int(idx)]
         end = start + self.seq_len
+        ep = self._episodes[epi]
 
         if self._preloaded is not None:
-            images = self._preloaded[start:end]
+            images = self._preloaded[epi][start:end]
             # ensure float32 downstream unless caller wants fp16
             if images.dtype != torch.float32:
                 images = images.float()
         else:
             imgs = []
-            for p in self._image_paths[start:end]:
+            for p in ep["image_paths"][start:end]:
                 imgs.append(self._get_image(p))
             images = torch.stack(imgs, dim=0)  # (T,C,H,W)
 
-        # actions for transitions: (T-1, A)
-        actions = None
-        if self.action_mode == "delta":
-            a = (self._joints[start + 1 : end] - self._joints[start : end - 1])
-        else:  # pos
-            a = self._joints[start : end - 1]
-        if self._normalize_actions:
-            a = (a - self._action_mean) / self._action_std
-        actions = a
+        actions = ep["actions"][start : end - 1]
+        if self._normalize_actions and actions.numel() > 0:
+            actions = (actions - self._action_mean) / self._action_std
         return images, actions

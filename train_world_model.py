@@ -3,7 +3,7 @@ import os
 
 import torch
 
-from model.src.core.train_world_model import train_world_model
+from model.src.core.train_world_model import _has_world_model_data, train_world_model
 from model.src.utils.config import load_yaml_config
 
 
@@ -62,7 +62,7 @@ def main():
     cfg_data_dir = cfg.get("world_data_dir")
     if not cfg_data_dir:
         cand = cfg.get("data_dir")
-        if isinstance(cand, str) and os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "joints.jsonl")):
+        if isinstance(cand, str) and os.path.isdir(cand) and _has_world_model_data(cand):
             cfg_data_dir = cand
 
     data_dir = args.data_dir or cfg_data_dir
@@ -72,8 +72,8 @@ def main():
         raise SystemExit("data_dir is required (pass arg or set world_data_dir in config.yml)")
     if not os.path.isdir(data_dir):
         raise SystemExit(f"data_dir not found: {data_dir}")
-    if not os.path.isfile(os.path.join(data_dir, "joints.jsonl")):
-        raise SystemExit(f"Expected joints.jsonl in {data_dir}")
+    if not _has_world_model_data(data_dir):
+        raise SystemExit(f"Expected joints.jsonl in {data_dir} or in at least one immediate subdirectory")
 
     if not out_dir:
         raise SystemExit("out_dir is required (pass arg or set world_out_dir/out_dir in config.yml)")

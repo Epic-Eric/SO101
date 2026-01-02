@@ -35,6 +35,21 @@ def _default_device(device: str | torch.device) -> torch.device:
     return torch.device(device)
 
 
+def _has_world_model_data(path: str) -> bool:
+    """Accept either flat folder with joints.jsonl or episode subfolders."""
+    joints_here = os.path.isfile(os.path.join(path, "joints.jsonl"))
+    if joints_here:
+        return True
+    try:
+        for name in os.listdir(path):
+            cand = os.path.join(path, name)
+            if os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "joints.jsonl")):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 @torch.no_grad()
 def _save_debug_images(
     artifact_dir: str,
@@ -102,6 +117,9 @@ def train_world_model(
             torch.set_float32_matmul_precision("high")
         except Exception:
             pass
+
+    if not _has_world_model_data(data_dir):
+        raise ValueError(f"Expected joints.jsonl in {data_dir} or in at least one immediate subdirectory")
 
     os.makedirs(out_dir, exist_ok=True)
 
@@ -200,8 +218,12 @@ def train_world_model(
         preload_dtype=preload_dtype,
     )
 
+    print(f"Loaded world-model dataset: episodes={getattr(dataset, 'num_episodes', 1)} sequences={len(dataset)}")
+
     model_meta["joint_keys"] = dataset.joint_keys
     model_meta["action_dim"] = dataset.action_dim
+    model_meta["num_episodes"] = getattr(dataset, "num_episodes", 1)
+    model_meta["sequences"] = len(dataset)
     save_manifest(artifact_dir, model_meta)
 
     # Train/val split: deterministic tail split like train_vae
