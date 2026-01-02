@@ -73,7 +73,9 @@ def main():
     if not os.path.isdir(data_dir):
         raise SystemExit(f"data_dir not found: {data_dir}")
     if not _has_world_model_data(data_dir):
-        raise SystemExit(f"Expected joints.jsonl in {data_dir} or in at least one immediate subdirectory")
+        raise SystemExit(
+            f"Expected joints.jsonl and frame images in {data_dir} or in at least one immediate subdirectory"
+        )
 
     if not out_dir:
         raise SystemExit("out_dir is required (pass arg or set world_out_dir/out_dir in config.yml)")

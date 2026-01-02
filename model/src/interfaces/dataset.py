@@ -10,6 +10,9 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 
+ACTION6_DIM = 6
+
+
 @dataclass
 class NormalizationParams:
     mean: Tuple[float, float, float] = (0.5, 0.5, 0.5)
@@ -116,7 +119,7 @@ class ImageJointSequenceDataset(Dataset):
                         meta_obj = json.load(mf)
                     jk = meta_obj.get("joint_keys6") if isinstance(meta_obj, dict) else None
                     if isinstance(jk, list) and len(jk) > 0:
-                        meta_joint_keys = [str(x) for x in jk][:6]
+                        meta_joint_keys = [str(x) for x in jk][:ACTION6_DIM]
                 except Exception:
                     meta_joint_keys = None
 
@@ -145,7 +148,7 @@ class ImageJointSequenceDataset(Dataset):
                         action6 = [float(x) for x in action6]
                     else:
                         action6 = None
-                    joints_delta = rec.get("joints_delta") if isinstance(rec, dict) else None
+                    joints_delta = rec.get("joints_delta")
                     records.append(
                         {
                             "image": img_path,
@@ -165,16 +168,22 @@ class ImageJointSequenceDataset(Dataset):
 
             action_vecs: List[List[float]] = []
             action_dim: Optional[int] = None
-            if any(r.get("action6") is not None for r in records):
+            has_action6 = False
+            for _r in records:
+                if _r.get("action6") is not None:
+                    has_action6 = True
+                    break
+            if has_action6:
+                # Prefer recorded teleop action6 vectors; pad/clip to the recorded dimension (default 6).
                 # Align actions with transitions: use action attached to arrival frame.
                 for r in records[1:]:
                     vec = r.get("action6") or []
                     if action_dim is None:
-                        action_dim = min(6, len(vec)) if len(vec) > 0 else 6
-                    padded = (list(vec) + [0.0] * 6)[: action_dim or 6]
+                        action_dim = min(ACTION6_DIM, len(vec)) if len(vec) > 0 else ACTION6_DIM
+                    padded = (list(vec)[:action_dim] + [0.0] * max(0, action_dim - len(vec)))
                     action_vecs.append([float(v) for v in padded])
                 if action_dim is None:
-                    action_dim = 6
+                    action_dim = ACTION6_DIM
                 action_source = "action6"
             else:
                 action_dim = len(joint_keys)
@@ -221,7 +230,9 @@ class ImageJointSequenceDataset(Dataset):
         total_actions = 0
 
         dtype = torch.float16 if self._preload_dtype.lower() in ("float16", "fp16") else torch.float32
-        self._preloaded: Optional[List[torch.Tensor]] = [] if self._preload_images else None
+        self._preloaded: Optional[List[torch.Tensor]] = None
+        if self._preload_images:
+            self._preloaded = []
 
         for ep_dir in episode_dirs:
             ep = _load_episode(ep_dir)
@@ -236,12 +247,12 @@ class ImageJointSequenceDataset(Dataset):
 
             if not self.joint_keys:
                 self.joint_keys = list(ep["joint_keys"])
-            elif ep["joint_keys"] and list(ep["joint_keys"]) != self.joint_keys:
+            elif list(ep["joint_keys"]) != self.joint_keys:
                 raise ValueError(f"Episode {ep_dir} joint keys differ from first episode")
             self._episodes.append(ep)
             self.num_episodes += 1
 
-            if ep["actions"].numel() > 0 and action_sum is not None and action_sumsq is not None:
+            if ep["actions"].numel() > 0:
                 total_actions += ep["actions"].shape[0]
                 action_sum += ep["actions"].sum(dim=0)
                 action_sumsq += (ep["actions"] ** 2).sum(dim=0)
@@ -256,10 +267,7 @@ class ImageJointSequenceDataset(Dataset):
         if not self._episodes:
             raise ValueError(f"No valid episodes with at least seq_len={self.seq_len} found in {root_dir}")
 
-        if self._preloaded is not None and len(self._preloaded) == 0:
-            self._preloaded = None
-
-        if self._normalize_actions and total_actions > 0 and action_sum is not None and action_sumsq is not None:
+        if self._normalize_actions and total_actions > 0:
             self._action_mean = action_sum / float(total_actions)
             var = (action_sumsq / float(total_actions)) - (self._action_mean ** 2)
             self._action_std = torch.sqrt(var.clamp_min(eps))
@@ -279,7 +287,7 @@ class ImageJointSequenceDataset(Dataset):
 
     def _get_image(self, path: str) -> torch.Tensor:
         if self._preloaded is not None:
-            raise RuntimeError("_get_image should not be called when preload_images is enabled")
+            raise RuntimeError("Cannot call _get_image when preload_images is enabled")
         if not self._cache_images:
             img = Image.open(path).convert("RGB")
             return self.transform(img)

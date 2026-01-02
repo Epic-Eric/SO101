@@ -118,9 +118,6 @@ def train_world_model(
         except Exception:
             pass
 
-    if not _has_world_model_data(data_dir):
-        raise ValueError(f"Expected joints.jsonl in {data_dir} or in at least one immediate subdirectory")
-
     os.makedirs(out_dir, exist_ok=True)
 
     existing = list_runs(out_dir)
