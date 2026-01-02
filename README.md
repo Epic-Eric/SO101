@@ -27,7 +27,7 @@ SO101/
 ├── requirements.txt        # Python dependencies
 ├── model/                  # Robot model package
 │   ├── src/
-│   │   ├── core/          # Core training logic (train_vae.py)
+│   │   ├── core/          # Core training logic and orchestration helpers
 │   │   ├── data/          # Data collection modules
 │   │   ├── interfaces/    # Type definitions and interfaces
 │   │   ├── models/        # VAE model implementations
