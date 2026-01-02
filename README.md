@@ -9,6 +9,8 @@
 
 A robotics project focused on sim-to-real transfer learning using Variational Autoencoders (VAE) for visual representation learning and teleoperation data collection.
 
+> **Status:** Work in progress; APIs, configs, and workflows may change as development continues.
+
 ## 🚀 Features
 
 - **Data Collection**: Teleoperation-based image capture system for robot learning
