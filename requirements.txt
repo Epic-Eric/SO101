@@ -104,3 +104,7 @@ xxhash==3.6.0
 yarl==1.22.0
 zipp==3.23.0
 pygame==2.6.1
+
+# Reward bead suite UI
+streamlit==1.29
+streamlit-drawable-canvas>=0.9

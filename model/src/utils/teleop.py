@@ -43,14 +43,28 @@ def setup_so101_with_camera(
 
     teleop.connect(calibrate=calibrate)
     robot.connect(calibrate=calibrate)
+    
+    # Ensure torque is enabled for teleoperation
+    if hasattr(robot, 'bus'):
+        print("Enabling torque on robot bus...")
+        robot.bus.enable_torque()
+    else:
+        print("Warning: Robot has no 'bus' attribute, cannot enable torque explicitly.")
+        
     return robot, teleop
 
 
 def step_teleop(robot: SO101Follower, teleop: SO101Leader) -> Dict[str, Any]:
-    """Single teleop step: read observation, get action, send action, return dict."""
-    observation = robot.get_observation()
+    """Single teleop step: get action, send action, read observation, return dict."""
+    # Match order from collect_image_and_joint.py: Action -> Send -> Observation
     action = teleop.get_action()
-    sent_action = robot.send_action(action)
+    
+    sent_action = None
+    if action is not None:
+        sent_action = robot.send_action(action)
+    
+    observation = robot.get_observation()
+        
     return {
         "timestamp": time.time(),
         "observation": observation,
