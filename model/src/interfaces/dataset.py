@@ -19,6 +19,22 @@ class NormalizationParams:
     std: Tuple[float, float, float] = (0.5, 0.5, 0.5)
 
 
+def _discover_episode_dirs(root: str) -> List[str]:
+    """Return list of episode dirs containing joints.jsonl (root itself or nested)."""
+    if os.path.isfile(os.path.join(root, "joints.jsonl")):
+        return [root]
+    eps: List[str] = []
+    try:
+        for dirpath, dirnames, filenames in os.walk(root):
+            dirnames.sort()
+            if "joints.jsonl" in filenames:
+                eps.append(dirpath)
+    except FileNotFoundError:
+        # Root directory missing or unreadable; treat as no episodes.
+        return []
+    return sorted(eps)
+
+
 class ImageFolder64Dataset(Dataset):
     """64x64 RGB dataset with optional normalization.
 
@@ -95,20 +111,6 @@ class ImageJointSequenceDataset(Dataset):
             t.append(transforms.Normalize(self.norm_params.mean, self.norm_params.std))
         self.transform = transforms.Compose(t)
 
-        def _discover_episode_dirs(root: str) -> List[str]:
-            """Return list of episode dirs containing joints.jsonl (root itself or subdirs)."""
-            if os.path.isfile(os.path.join(root, "joints.jsonl")):
-                return [root]
-            eps: List[str] = []
-            try:
-                for name in sorted(os.listdir(root)):
-                    cand = os.path.join(root, name)
-                    if os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "joints.jsonl")):
-                        eps.append(cand)
-            except FileNotFoundError:
-                pass
-            return eps
-
         def _load_episode(ep_dir: str) -> Optional[Dict]:
             """Load one episode folder."""
             meta_joint_keys: Optional[List[str]] = None
@@ -127,6 +129,7 @@ class ImageJointSequenceDataset(Dataset):
             joints_path = os.path.join(ep_dir, "joints.jsonl")
             if not os.path.isfile(joints_path):
                 return None
+            parse_warn_action6 = False
             with open(joints_path, "r") as f:
                 for line in f:
                     line = line.strip()
@@ -143,11 +146,16 @@ class ImageJointSequenceDataset(Dataset):
                     img_path = os.path.join(ep_dir, img_name)
                     if not os.path.isfile(img_path):
                         continue
-                    action6 = rec.get("action6")
-                    if isinstance(action6, list):
-                        action6 = [float(x) for x in action6]
-                    else:
-                        action6 = None
+                    action6_raw = rec.get("action6")
+                    action6 = None
+                    if isinstance(action6_raw, list):
+                        try:
+                            action6 = [float(x) for x in action6_raw]
+                        except Exception:
+                            action6 = None
+                            parse_warn_action6 = True
+                    elif action6_raw is not None:
+                        parse_warn_action6 = True
                     joints_delta = rec.get("joints_delta")
                     records.append(
                         {
@@ -168,22 +176,26 @@ class ImageJointSequenceDataset(Dataset):
 
             action_vecs: List[List[float]] = []
             action_dim: Optional[int] = None
-            has_action6 = False
-            for _r in records:
-                if _r.get("action6") is not None:
-                    has_action6 = True
-                    break
+            has_action6 = any(r.get("action6") is not None for r in records[1:])
             if has_action6:
                 # Prefer recorded teleop action6 vectors; pad/clip to the recorded dimension (default 6).
                 # Align actions with transitions: use action attached to arrival frame.
+                seen_length: Optional[int] = None
                 for r in records[1:]:
                     vec = r.get("action6") or []
                     if action_dim is None:
                         action_dim = min(ACTION6_DIM, len(vec)) if len(vec) > 0 else ACTION6_DIM
-                    padded = (list(vec)[:action_dim] + [0.0] * max(0, action_dim - len(vec)))
+                        seen_length = len(vec)
+                    if seen_length is not None and len(vec) not in (0, seen_length):
+                        raise ValueError(f"Inconsistent action6 length in episode {ep_dir}")
+                    # NOTE: We pad missing elements in action6 with 0.0 to enforce a fixed action_dim.
+                    # Downstream consumers should interpret padded zeros as placeholders.
+                    padded = list(vec)[:action_dim] + [0.0] * max(0, action_dim - len(vec))
                     action_vecs.append([float(v) for v in padded])
                 if action_dim is None:
                     action_dim = ACTION6_DIM
+                if len(action_vecs) == 0:
+                    return None
                 action_source = "action6"
             else:
                 action_dim = len(joint_keys)
@@ -204,8 +216,17 @@ class ImageJointSequenceDataset(Dataset):
                         raise ValueError("action_mode must be 'delta' or 'pos'")
                     action_vecs.append(vals)
 
+            if action_dim is None:
+                action_dim = ACTION6_DIM if has_action6 else len(joint_keys)
+
             actions = torch.tensor(action_vecs, dtype=torch.float32) if action_vecs else torch.zeros((0, action_dim))
             image_paths = [r["image"] for r in records]
+
+            if actions.shape[0] != (len(image_paths) - 1):
+                return None
+
+            if parse_warn_action6:
+                print(f"[ImageJointSequenceDataset] Warning: some action6 entries could not be parsed in {ep_dir}")
 
             return {
                 "dir": ep_dir,
@@ -243,11 +264,14 @@ class ImageJointSequenceDataset(Dataset):
                 action_sum = torch.zeros(self.action_dim, dtype=torch.float32)
                 action_sumsq = torch.zeros(self.action_dim, dtype=torch.float32)
             elif self.action_dim != int(ep["action_dim"]):
-                raise ValueError(f"Episode {ep_dir} has action_dim={ep['action_dim']} expected {self.action_dim}")
+                raise ValueError(
+                    f"Episode {ep_dir} has action_dim={ep['action_dim']} but first episode uses {self.action_dim}; "
+                    "mixing episodes with different action encodings (e.g., action6 vs joint-based) is not supported."
+                )
 
             if not self.joint_keys:
                 self.joint_keys = list(ep["joint_keys"])
-            elif list(ep["joint_keys"]) != self.joint_keys:
+            elif set(ep["joint_keys"]) != set(self.joint_keys):
                 raise ValueError(f"Episode {ep_dir} joint keys differ from first episode")
             self._episodes.append(ep)
             self.num_episodes += 1

@@ -46,6 +46,7 @@ def _has_world_model_data(path: str) -> bool:
             if os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "joints.jsonl")):
                 return True
     except Exception:
+        # If directory listing fails, treat as no data.
         pass
     return False
 
@@ -105,6 +106,7 @@ def train_world_model(
     preload_images: bool = False,
     preload_dtype: str = "float16",
     amp: bool = True,
+    action_mask_prob: float = 0.1,
 ):
     dev = _default_device(device)
 
@@ -194,6 +196,7 @@ def train_world_model(
         "action_mode": action_mode,
         "kl_beta": kl_beta,
         "free_nats": free_nats,
+        "action_mask_prob": action_mask_prob,
     }
     save_manifest(artifact_dir, model_meta)
 
@@ -223,7 +226,7 @@ def train_world_model(
     model_meta["sequences"] = len(dataset)
     save_manifest(artifact_dir, model_meta)
 
-    # Train/val split: deterministic tail split like train_vae
+    # Train/val split: episode-aware tail split to avoid leakage across episodes.
     val_loader = None
     nw = int(num_workers)
     pm = bool(pin_memory) and (dev.type == "cuda")
@@ -240,14 +243,21 @@ def train_world_model(
 
     if val_split and 0.0 < val_split < 1.0:
         val_size = max(1, int(len(dataset) * val_split))
-        indices = list(range(len(dataset)))
-        train_indices = indices[:-val_size]
-        val_indices = indices[-val_size:]
+        episode_indices = list(range(getattr(dataset, "num_episodes", 1)))
+        val_ep = max(1, int(len(episode_indices) * val_split))
+        val_eps = set(episode_indices[-val_ep:])
+        train_indices = [i for i, (ep, _) in enumerate(dataset._windows) if ep not in val_eps]
+        val_indices = [i for i, (ep, _) in enumerate(dataset._windows) if ep in val_eps]
+        # fallback to size-based split if something went wrong
+        if not train_indices or not val_indices:
+            indices = list(range(len(dataset)))
+            train_indices = indices[:-val_size]
+            val_indices = indices[-val_size:]
         train_ds = Subset(dataset, train_indices)
         val_ds = Subset(dataset, val_indices)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
-        print(f"Train/Val split: train={len(train_ds)} val={len(val_ds)}")
+        print(f"Train/Val split: train={len(train_ds)} val={len(val_ds)} (episodes val={len(val_eps)})")
     else:
         train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
 
@@ -299,6 +309,9 @@ def train_world_model(
         for step_idx, (images, actions) in enumerate(pbar, start=1):
             images = images.to(dev, non_blocking=True)
             actions = actions.to(dev, non_blocking=True)
+            if action_mask_prob and action_mask_prob > 0:
+                mask = (torch.rand_like(actions) < float(action_mask_prob))
+                actions = actions.masked_fill(mask, 0.0)
 
             optimizer.zero_grad()
             if use_amp:

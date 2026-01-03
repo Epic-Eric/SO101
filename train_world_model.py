@@ -39,6 +39,12 @@ def main():
     parser.add_argument("--cache_images", action="store_true", help="Cache transformed frames in RAM (speeds up slow disk)")
     parser.add_argument("--cache_size", type=int, default=None, help="Max number of frames to keep in RAM cache")
     parser.add_argument(
+        "--action_mask_prob",
+        type=float,
+        default=None,
+        help="Probability of masking actions during training for autoregressive robustness",
+    )
+    parser.add_argument(
         "--preload_images",
         action="store_true",
         help="Preload ALL transformed frames into RAM once (fastest; usually use --num_workers 0)",
@@ -73,9 +79,7 @@ def main():
     if not os.path.isdir(data_dir):
         raise SystemExit(f"data_dir not found: {data_dir}")
     if not _has_world_model_data(data_dir):
-        raise SystemExit(
-            f"Expected joints.jsonl and frame images in {data_dir} or in at least one immediate subdirectory"
-        )
+        raise SystemExit(f"Expected joints.jsonl in {data_dir} or in at least one immediate subdirectory")
 
     if not out_dir:
         raise SystemExit("out_dir is required (pass arg or set world_out_dir/out_dir in config.yml)")
@@ -104,6 +108,7 @@ def main():
     cache_size = args.cache_size if args.cache_size is not None else int(cfg.get("world_cache_size", 2048))
     preload_images = bool(args.preload_images)
     preload_dtype = args.preload_dtype if args.preload_dtype is not None else str(cfg.get("world_preload_dtype", "float16"))
+    action_mask_prob = args.action_mask_prob if args.action_mask_prob is not None else float(cfg.get("world_action_mask_prob", 0.1))
 
     if preload_images and num_workers != 0:
         print("Note: --preload_images duplicates memory across DataLoader workers; consider --num_workers 0")
@@ -114,7 +119,10 @@ def main():
 
     print(f"Using device: {device}")
     print(f"Training world model on {data_dir}, saving to {out_dir}")
-    print(f"epochs={epochs} batch_size={batch_size} lr={lr} seq_len={seq_len} latent_dim={latent_dim} deter_dim={deter_dim} action_mode={action_mode}")
+    print(
+        f"epochs={epochs} batch_size={batch_size} lr={lr} seq_len={seq_len} latent_dim={latent_dim} "
+        f"deter_dim={deter_dim} action_mode={action_mode} action_mask_prob={action_mask_prob}"
+    )
 
     final_model_path = train_world_model(
         data_dir=data_dir,
@@ -140,6 +148,7 @@ def main():
         preload_images=preload_images,
         preload_dtype=preload_dtype,
         amp=amp,
+        action_mask_prob=action_mask_prob,
     )
 
     print(f"Training complete. Final model saved to {final_model_path}")
