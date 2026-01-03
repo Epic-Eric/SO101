@@ -3,8 +3,10 @@ import os
 
 import torch
 
+from model.src.core.run_context import prepare_run_context
 from model.src.core.train_vae import train
 from model.src.utils.config import load_yaml_config
+from model.src.utils.saving import load_checkpoint
 
 
 def main():
@@ -50,6 +52,13 @@ def main():
     print(f"Training VAE on data from {data_dir}, saving to {out_dir}")
     print(f"Parameters: epochs={epochs}, batch_size={batch_size}, lr={lr}, latent_dim={latent_dim}")
     
+    run_context = prepare_run_context(
+        out_dir=out_dir,
+        run_name="vae",
+        load_checkpoint_fn=load_checkpoint,
+        prompt_user=True,
+    )
+
     final_model_path = train(
         data_dir=data_dir,
         out_dir=out_dir,
@@ -60,6 +69,7 @@ def main():
         device=device,
         augment=(None if args.augment == "none" else args.augment),
         augment_alpha=args.augment_alpha,
+        run_context=run_context,
     )
 
     print(f"Training complete. Final model saved to {final_model_path}")

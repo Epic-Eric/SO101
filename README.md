@@ -9,6 +9,8 @@
 
 A robotics project focused on sim-to-real transfer learning using Variational Autoencoders (VAE) for visual representation learning and teleoperation data collection.
 
+> **Status:** Work in progress; APIs, configs, and workflows may change as development continues.
+
 ## 🚀 Features
 
 - **Data Collection**: Teleoperation-based image capture system for robot learning
@@ -16,18 +18,23 @@ A robotics project focused on sim-to-real transfer learning using Variational Au
 - **LeRobot Integration**: Includes [HuggingFace LeRobot](https://github.com/huggingface/lerobot) as a submodule
 - **Flexible Configuration**: YAML-based configuration for easy experimentation
 - **Multi-Device Support**: Automatic device selection (CPU, CUDA, MPS)
+- **World Model Workflow**: Collect synchronized images + joints, train an RSSM world model, and visualize rollouts
 
 ## 📋 Repository Structure
 
 ```
 SO101/
 ├── collect_data.py         # Script for collecting teleoperation data
+├── collect_image_and_joint.py # Capture synchronized camera frames + joints.jsonl
 ├── train_model.py          # Main training script for VAE
+├── train_world_model.py    # Train VAE + RSSM world model on image/joint sequences
+├── world_model_inference.py # Interactive world-model rollout viewer (pygame/headless)
+├── run_app.py              # Launcher for Streamlit apps (reward camera, world-model collector)
 ├── config.yml              # Configuration file for training parameters
 ├── requirements.txt        # Python dependencies
 ├── model/                  # Robot model package
 │   ├── src/
-│   │   ├── core/          # Core training logic (train_vae.py)
+│   │   ├── core/          # Core training logic and orchestration helpers
 │   │   ├── data/          # Data collection modules
 │   │   ├── interfaces/    # Type definitions and interfaces
 │   │   ├── models/        # VAE model implementations
@@ -109,6 +116,47 @@ python train_model.py ./data/captured_images ./output --epochs 480 --batch_size 
 - `--batch_size`: Batch size (default: from config.yml)
 - `--lr`: Learning rate (default: from config.yml)
 - `--latent_dim`: Latent dimension size (default: from config.yml)
+
+### Streamlit Apps
+
+Use the unified launcher to run bundled Streamlit tools:
+
+```bash
+python run_app.py reward_camera   # Red bead detector + teleop UI
+python run_app.py world_collect   # World-model data collection UI
+```
+
+`run_app.py` automatically adds the repository root to `PYTHONPATH`, ensuring absolute imports work regardless of your current working directory when launching the command.
+
+### World Model Workflow
+
+**1) Collect synchronized images + joints**
+
+- Set hardware env vars (e.g., `export FOLLOWER_PORT=/dev/ttyUSB0`; optional `export LEADER_PORT=/dev/ttyUSB1` for teleoperation follow mode).
+- Run:
+  
+  ```bash
+  python collect_image_and_joint.py
+  ```
+- Episodes are saved under `data/captured_images_and_joints/episode_*/` with `joints.jsonl` and JPEG frames.
+
+**2) Train the world model (VAE + RSSM)**
+
+```bash
+python train_world_model.py data/captured_images_and_joints ./output --seq_len 16 --image_size 64
+```
+
+Arguments fall back to `config.yml`:
+- `data_dir` uses `world_data_dir` from config.yml, falling back to the general `data_dir` if `world_data_dir` is not configured.
+- `out_dir` uses `world_out_dir`; if `world_out_dir` is not configured, it uses the general `out_dir` value from config.yml.
+- Hyperparameters honor `world_*` overrides such as `world_epochs`, `world_batch_size`, `world_lr`, and `world_latent_dim`.
+
+**3) Visualize rollouts / reconstructions**
+
+```bash
+python world_model_inference.py --data-root data/captured_images_and_joints --artifact-dir output/artifacts
+# Add --headless to dump PNGs without opening a pygame window
+```
 
 ### Configuration
 

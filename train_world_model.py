@@ -3,8 +3,10 @@ import os
 
 import torch
 
-from model.src.core.train_world_model import _has_world_model_data, train_world_model
+from model.src.core.run_context import prepare_run_context
+from model.src.core.train_world_model import train_world_model
 from model.src.utils.config import load_yaml_config
+from model.src.utils.saving import load_checkpoint
 
 
 def _pick_device() -> str:
@@ -124,6 +126,13 @@ def main():
         f"deter_dim={deter_dim} action_mode={action_mode} action_mask_prob={action_mask_prob}"
     )
 
+    run_context = prepare_run_context(
+        out_dir=out_dir,
+        run_name="world_model",
+        load_checkpoint_fn=load_checkpoint,
+        prompt_user=True,
+    )
+
     final_model_path = train_world_model(
         data_dir=data_dir,
         out_dir=out_dir,
@@ -148,7 +157,7 @@ def main():
         preload_images=preload_images,
         preload_dtype=preload_dtype,
         amp=amp,
-        action_mask_prob=action_mask_prob,
+        run_context=run_context,
     )
 
     print(f"Training complete. Final model saved to {final_model_path}")

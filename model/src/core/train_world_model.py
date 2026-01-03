@@ -2,7 +2,7 @@ import os
 import json
 import uuid
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -17,11 +17,10 @@ from model.src.utils.saving import (
     save_checkpoint,
     save_final_model,
     save_training_summary,
-    make_artifact_dir,
     save_manifest,
-    list_runs,
     load_checkpoint,
 )
+from model.src.core.run_context import TrainingRunContext, prepare_run_context
 from model.src.models.world_model import WorldModel
 
 
@@ -106,7 +105,7 @@ def train_world_model(
     preload_images: bool = False,
     preload_dtype: str = "float16",
     amp: bool = True,
-    action_mask_prob: float = 0.1,
+    run_context: Optional[TrainingRunContext] = None,
 ):
     dev = _default_device(device)
 
@@ -122,51 +121,15 @@ def train_world_model(
 
     os.makedirs(out_dir, exist_ok=True)
 
-    existing = list_runs(out_dir)
-    artifact_dir = None
-    resume_ckpt = None
-
-    if existing:
-        print("Found existing runs in output artifacts:")
-        for i, p in enumerate(existing):
-            try:
-                with open(os.path.join(p, "manifest.json"), "r") as f:
-                    m = json.load(f)
-            except Exception:
-                m = {"path": p}
-            label = m.get("run_name") if isinstance(m, dict) else p
-            mid = m.get("model_id") if isinstance(m, dict) else None
-            ts = m.get("timestamp") if isinstance(m, dict) else None
-            print(f"[{i}] {os.path.basename(p)} run_name={label} model_id={mid} ts={ts}")
-
-        choice = input("Choose '[c] <index>' to continue, '[r] <index>' to rewrite (start new run), or 'n' for new run [n]: ").strip()
-        if choice.startswith("c"):
-            try:
-                idx = int(choice.split()[1])
-                artifact_dir = existing[idx]
-                resume_ckpt = load_checkpoint(artifact_dir)
-                if resume_ckpt is None:
-                    print("No checkpoint found to resume; starting fresh in a new artifact dir.")
-                    artifact_dir = None
-            except Exception as e:
-                print(f"Could not parse choice/continue: {e}; starting new run")
-                artifact_dir = None
-        elif choice.startswith("r"):
-            try:
-                idx = int(choice.split()[1])
-                try:
-                    with open(os.path.join(existing[idx], "manifest.json"), "r") as f:
-                        oldm = json.load(f)
-                        run_name = oldm.get("run_name")
-                except Exception:
-                    run_name = None
-                artifact_dir = make_artifact_dir(out_dir, run_name=run_name)
-            except Exception as e:
-                print(f"Could not parse rewrite choice: {e}; creating a new run")
-                artifact_dir = None
-
-    if artifact_dir is None:
-        artifact_dir = make_artifact_dir(out_dir, run_name="world_model")
+    if run_context is None:
+        run_context = prepare_run_context(
+            out_dir=out_dir,
+            run_name="world_model",
+            load_checkpoint_fn=load_checkpoint,
+            prompt_user=False,
+        )
+    artifact_dir = run_context.artifact_dir
+    resume_ckpt = run_context.resume_checkpoint
 
     manifest_path = os.path.join(artifact_dir, "manifest.json")
     if resume_ckpt is not None and os.path.exists(manifest_path):
