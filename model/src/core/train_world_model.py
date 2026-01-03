@@ -246,8 +246,9 @@ def train_world_model(
         episode_indices = list(range(getattr(dataset, "num_episodes", 1)))
         val_ep = max(1, int(len(episode_indices) * val_split))
         val_eps = set(episode_indices[-val_ep:])
-        train_indices = [i for i, (ep, _) in enumerate(dataset._windows) if ep not in val_eps]
-        val_indices = [i for i, (ep, _) in enumerate(dataset._windows) if ep in val_eps]
+        windows = getattr(dataset, "windows", None) or []
+        train_indices = [i for i, (ep, _) in enumerate(windows) if ep not in val_eps]
+        val_indices = [i for i, (ep, _) in enumerate(windows) if ep in val_eps]
         # fallback to size-based split if something went wrong
         if not train_indices or not val_indices:
             indices = list(range(len(dataset)))
@@ -310,7 +311,9 @@ def train_world_model(
             images = images.to(dev, non_blocking=True)
             actions = actions.to(dev, non_blocking=True)
             if action_mask_prob and action_mask_prob > 0:
-                mask = (torch.rand_like(actions) < float(action_mask_prob))
+                mask = torch.rand(actions.shape[0], actions.shape[1], 1, device=actions.device) < float(
+                    action_mask_prob
+                )
                 actions = actions.masked_fill(mask, 0.0)
 
             optimizer.zero_grad()

@@ -183,14 +183,17 @@ class ImageJointSequenceDataset(Dataset):
                 seen_length: Optional[int] = None
                 for r in records[1:]:
                     vec = r.get("action6") or []
+                    lenv = len(vec)
+                    if lenv == 0:
+                        continue
                     if action_dim is None:
-                        action_dim = min(ACTION6_DIM, len(vec)) if len(vec) > 0 else ACTION6_DIM
-                        seen_length = len(vec)
-                    if seen_length is not None and len(vec) not in (0, seen_length):
+                        action_dim = min(ACTION6_DIM, lenv) if lenv > 0 else ACTION6_DIM
+                        seen_length = lenv
+                    if seen_length is not None and lenv != seen_length:
                         raise ValueError(f"Inconsistent action6 length in episode {ep_dir}")
                     # NOTE: We pad missing elements in action6 with 0.0 to enforce a fixed action_dim.
-                    # Downstream consumers should interpret padded zeros as placeholders.
-                    padded = list(vec)[:action_dim] + [0.0] * max(0, action_dim - len(vec))
+                    # If zero is meaningful in your action space, replace this padding strategy.
+                    padded = list(vec)[:action_dim] + [0.0] * max(0, action_dim - lenv)
                     action_vecs.append([float(v) for v in padded])
                 if action_dim is None:
                     action_dim = ACTION6_DIM
@@ -332,6 +335,10 @@ class ImageJointSequenceDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self._windows)
+
+    @property
+    def windows(self) -> List[Tuple[int, int]]:
+        return list(self._windows)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         epi, start = self._windows[int(idx)]
