@@ -2,7 +2,7 @@ import os
 import json
 import uuid
 from datetime import datetime
-from typing import Tuple, List
+from typing import Tuple, List, Optional
 
 import torch
 from tqdm.auto import tqdm
@@ -20,11 +20,10 @@ from model.src.utils.saving import (
     save_checkpoint,
     save_final_model,
     save_training_summary,
-    make_artifact_dir,
     save_manifest,
-    list_runs,
     load_checkpoint,
 )
+from model.src.core.run_context import TrainingRunContext, prepare_run_context
 from model.visualization.latent import plot_latent_hist, plot_latent_pca, plot_latent_heatmap, save_decoded_image_from_latent
 
 
@@ -42,6 +41,7 @@ def train(
     device: str | torch.device = "auto",
     augment: str | None = "cutmix",
     augment_alpha: float = 1.0,
+    run_context: Optional[TrainingRunContext] = None,
 ):
     if device == "auto":
         device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
@@ -54,58 +54,15 @@ def train(
 
     os.makedirs(out_dir, exist_ok=True)
 
-    # If there are previous runs under out_dir/artifacts, offer to continue or rewrite
-    existing = list_runs(out_dir)
-    artifact_dir = None
-    resume_ckpt = None
-    if existing:
-        print("Found existing runs in output artifacts:")
-        runs_meta = []
-        for i, p in enumerate(existing):
-            try:
-                with open(os.path.join(p, "manifest.json"), "r") as f:
-                    m = json.load(f)
-            except Exception:
-                m = {"path": p}
-            runs_meta.append((p, m))
-            label = m.get("run_name") if isinstance(m, dict) else p
-            mid = m.get("model_id") if isinstance(m, dict) else None
-            ts = m.get("timestamp") if isinstance(m, dict) else None
-            print(f"[{i}] {os.path.basename(p)} run_name={label} model_id={mid} ts={ts}")
-
-        choice = input("Choose '[c] <index>' to continue, '[r] <index>' to rewrite (start new run), or 'n' for new run [n]: ").strip()
-        if choice.startswith("c"):
-            try:
-                idx = int(choice.split()[1])
-                artifact_dir = existing[idx]
-                # Attempt to load latest checkpoint
-                resume_ckpt = load_checkpoint(artifact_dir)
-                if resume_ckpt is None:
-                    print("No checkpoint found to resume; starting fresh in a new artifact dir.")
-                    artifact_dir = None
-            except Exception as e:
-                print(f"Could not parse choice/continue: {e}; starting new run")
-                artifact_dir = None
-        elif choice.startswith("r"):
-            try:
-                idx = int(choice.split()[1])
-                # create a new artifact dir preserving run name if present
-                try:
-                    with open(os.path.join(existing[idx], "manifest.json"), "r") as f:
-                        oldm = json.load(f)
-                        run_name = oldm.get("run_name")
-                except Exception:
-                    run_name = None
-                artifact_dir = make_artifact_dir(out_dir, run_name=run_name)
-            except Exception as e:
-                print(f"Could not parse rewrite choice: {e}; creating a new run")
-                artifact_dir = None
-        else:
-            artifact_dir = None
-
-    if artifact_dir is None:
-        # create a fresh artifact dir for this run
-        artifact_dir = make_artifact_dir(out_dir, run_name="vae")
+    if run_context is None:
+        run_context = prepare_run_context(
+            out_dir=out_dir,
+            run_name="vae",
+            load_checkpoint_fn=load_checkpoint,
+            prompt_user=False,
+        )
+    artifact_dir = run_context.artifact_dir
+    resume_ckpt = run_context.resume_checkpoint
 
     # Write or reuse run manifest / metadata. If resuming, preserve original manifest values
     manifest_path = os.path.join(artifact_dir, "manifest.json")
