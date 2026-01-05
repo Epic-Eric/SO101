@@ -1,7 +1,7 @@
 # SO101 - Sim-to-Real Robot Learning
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Epic-Eric/SO101.svg?style=social&label=Star)](https://github.com/Epic-Eric/SO101)
 [![GitHub forks](https://img.shields.io/github/forks/Epic-Eric/SO101.svg?style=social&label=Fork)](https://github.com/Epic-Eric/SO101)
 [![Last Commit](https://img.shields.io/github/last-commit/Epic-Eric/SO101)](https://github.com/Epic-Eric/SO101/commits)
@@ -238,7 +238,7 @@ python test_use/teleop/teleop_api.py
 
 ## 📝 License
 
-Proprietary - See LICENSE for details
+MIT - See LICENSE for details
 
 ## 👥 Authors
 
