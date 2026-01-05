@@ -9,6 +9,8 @@
 
 A robotics project focused on sim-to-real transfer learning using Variational Autoencoders (VAE) for visual representation learning and teleoperation data collection.
 
+SO101 aims to provide a practical, reproducible pipeline for sim-to-real robot learning experiments, from data collection to world-model visualization.
+
 > **Status:** Work in progress; APIs, configs, and workflows may change as development continues.
 
 ## 🚀 Features
