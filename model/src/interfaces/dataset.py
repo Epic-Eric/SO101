@@ -9,6 +9,11 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
+try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover
+    tqdm = None
+
 
 ACTION6_DIM = 6
 
@@ -23,6 +28,23 @@ def _discover_episode_dirs(root: str) -> List[str]:
     """Return list of episode dirs containing joints.jsonl (root itself or nested)."""
     if os.path.isfile(os.path.join(root, "joints.jsonl")):
         return [root]
+
+    # Fast-path: for the common layout `root/episode_*/joints.jsonl`, avoid an expensive
+    # recursive os.walk which is very slow on networked filesystems (e.g., Colab Drive).
+    try:
+        immediate: List[str] = []
+        for name in sorted(os.listdir(root)):
+            ep_dir = os.path.join(root, name)
+            if os.path.isdir(ep_dir) and os.path.isfile(os.path.join(ep_dir, "joints.jsonl")):
+                immediate.append(ep_dir)
+        if immediate:
+            return immediate
+    except FileNotFoundError:
+        return []
+    except Exception:
+        # Fall back to recursive walk if listing fails.
+        pass
+
     eps: List[str] = []
     try:
         for dirpath, dirnames, filenames in os.walk(root):
@@ -129,6 +151,15 @@ class ImageJointSequenceDataset(Dataset):
             joints_path = os.path.join(ep_dir, "joints.jsonl")
             if not os.path.isfile(joints_path):
                 return None
+
+            # Performance: checking file existence with os.path.isfile per frame is very slow
+            # on networked filesystems (e.g., Colab Drive). Cache directory listing once.
+            ep_files: Optional[set[str]] = None
+            try:
+                ep_files = set(os.listdir(ep_dir))
+            except Exception:
+                ep_files = None
+
             parse_warn_action6 = False
             with open(joints_path, "r") as f:
                 for line in f:
@@ -144,8 +175,12 @@ class ImageJointSequenceDataset(Dataset):
                     if not isinstance(img_name, str) or not isinstance(joints, dict):
                         continue
                     img_path = os.path.join(ep_dir, img_name)
-                    if not os.path.isfile(img_path):
-                        continue
+                    if ep_files is not None:
+                        if img_name not in ep_files:
+                            continue
+                    else:
+                        if not os.path.isfile(img_path):
+                            continue
                     action6_raw = rec.get("action6")
                     action6 = None
                     if isinstance(action6_raw, list):
@@ -258,7 +293,11 @@ class ImageJointSequenceDataset(Dataset):
         if self._preload_images:
             self._preloaded = []
 
-        for ep_dir in episode_dirs:
+        ep_iter = episode_dirs
+        if tqdm is not None:
+            ep_iter = tqdm(episode_dirs, desc="Loading episodes", unit="ep")
+
+        for ep_dir in ep_iter:
             ep = _load_episode(ep_dir)
             if ep is None:
                 continue

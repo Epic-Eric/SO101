@@ -13,6 +13,23 @@ def _pick_device() -> str:
     return "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _has_world_model_data(path: str) -> bool:
+    """Accept either a flat folder with joints.jsonl or episode subfolders.
+
+    For episode roots, we accept any nested folder containing joints.jsonl.
+    """
+
+    if os.path.isfile(os.path.join(path, "joints.jsonl")):
+        return True
+    try:
+        for dirpath, _, filenames in os.walk(path):
+            if "joints.jsonl" in filenames:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train a VAE+RSSM world model from image sequences + joints.jsonl")
     parser.add_argument("data_dir", type=str, nargs="?", help="Directory containing joints.jsonl and frames (e.g. data/captured_images_and_joints)")
@@ -30,7 +47,12 @@ def main():
     parser.add_argument("--action_mode", type=str, default=None, choices=["delta", "pos"], help="How to convert joints into action vectors")
     parser.add_argument("--kl_beta", type=float, default=None)
     parser.add_argument("--free_nats", type=float, default=None)
-    parser.add_argument("--val_split", type=float, default=None)
+    parser.add_argument(
+        "--val_split",
+        type=float,
+        default=None,
+        help="Validation split as fraction (e.g. 0.1) or percent (e.g. 10 for 10%)",
+    )
     parser.add_argument("--log_every", type=int, default=None, help="Update per-batch loss stats every N steps")
 
     # Performance knobs (useful for Colab / Google Drive)
@@ -60,6 +82,17 @@ def main():
     )
 
     parser.add_argument("--device", type=str, default="auto", help="auto|cpu|cuda|mps")
+    parser.add_argument(
+        "--no_prompt",
+        action="store_true",
+        help="Do not prompt for artifact resume/rewrite; always start a new run (recommended for batch jobs)",
+    )
+
+    parser.add_argument(
+        "--reset_optimizer",
+        action="store_true",
+        help="When resuming from a checkpoint, load model weights but reset optimizer state",
+    )
 
     args = parser.parse_args()
 
@@ -100,6 +133,13 @@ def main():
     kl_beta = args.kl_beta if args.kl_beta is not None else float(cfg.get("kl_beta", 1.0))
     free_nats = args.free_nats if args.free_nats is not None else float(cfg.get("free_nats", 0.0))
     val_split = args.val_split if args.val_split is not None else float(cfg.get("val_split", 0.1))
+    # Accept percent inputs like 10 meaning 10%.
+    if val_split is not None and val_split > 1.0:
+        if val_split <= 100.0:
+            print(f"Interpreting val_split={val_split} as {val_split/100.0:.3f} (percent -> fraction)")
+            val_split = float(val_split) / 100.0
+        else:
+            raise SystemExit(f"val_split must be in (0,1) as a fraction, or <=100 as a percent; got {val_split}")
     log_every = args.log_every if args.log_every is not None else int(cfg.get("world_log_every", cfg.get("log_every", 10)))
 
     num_workers = args.num_workers if args.num_workers is not None else int(cfg.get("world_num_workers", 2))
@@ -126,11 +166,12 @@ def main():
         f"deter_dim={deter_dim} action_mode={action_mode} action_mask_prob={action_mask_prob}"
     )
 
+    prompt_user = not args.no_prompt
     run_context = prepare_run_context(
         out_dir=out_dir,
         run_name="world_model",
         load_checkpoint_fn=load_checkpoint,
-        prompt_user=True,
+        prompt_user=prompt_user,
     )
 
     final_model_path = train_world_model(
@@ -146,6 +187,7 @@ def main():
         action_mode=action_mode,
         kl_beta=kl_beta,
         free_nats=free_nats,
+        action_mask_prob=action_mask_prob,
         val_split=val_split,
         device=device,
         log_every=log_every,
@@ -157,6 +199,7 @@ def main():
         preload_images=preload_images,
         preload_dtype=preload_dtype,
         amp=amp,
+        reset_optimizer=bool(args.reset_optimizer),
         run_context=run_context,
     )
 
