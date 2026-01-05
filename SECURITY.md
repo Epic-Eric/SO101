@@ -6,7 +6,8 @@ This project is under active development. Please use the latest commit on `main`
 
 ## Reporting a Vulnerability
 
-- Please report security issues privately by contacting the maintainers or opening a security-focused issue.
+- Please report security issues **privately** through the GitHub Security Advisory workflow (Security tab → Report a vulnerability).
+- Do not open public issues for vulnerabilities.
 - Include a clear description of the vulnerability, steps to reproduce, and any potential impact.
 - We will acknowledge receipt within 5 business days and provide updates until the issue is resolved.
 
