@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import time
 from datetime import datetime
 from typing import List, Optional
 
@@ -34,6 +35,22 @@ def _default_device(device: str | torch.device) -> torch.device:
     return torch.device(device)
 
 
+def _has_world_model_data(path: str) -> bool:
+    """Accept either flat folder with joints.jsonl or episode subfolders."""
+    joints_here = os.path.isfile(os.path.join(path, "joints.jsonl"))
+    if joints_here:
+        return True
+    try:
+        for name in os.listdir(path):
+            cand = os.path.join(path, name)
+            if os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "joints.jsonl")):
+                return True
+    except Exception:
+        # If directory listing fails, treat as no data.
+        pass
+    return False
+
+
 @torch.no_grad()
 def _save_debug_images(
     artifact_dir: str,
@@ -42,6 +59,7 @@ def _save_debug_images(
     batch_images: torch.Tensor,
     batch_actions: torch.Tensor,
     norm_params,
+    filename_prefix: str = "",
 ):
     import torchvision.utils as vutils
 
@@ -50,18 +68,23 @@ def _save_debug_images(
     actions = batch_actions[:1]
 
     out = model(images, actions)
-    # Recon grid: first 8 gt + first 8 recon
-    t = min(8, images.shape[1])
-    gt = denormalize(images[0, :t], norm_params).clamp(0, 1)
-    rc = denormalize(out.x_rec[0, :t], norm_params).clamp(0, 1)
+    # Recon grid: show a longer horizon by sampling skipped frames across the full sequence.
+    num_cols = 8
+    t_total = int(images.shape[1])
+    cols = min(num_cols, t_total)
+    idx = torch.linspace(0, t_total - 1, steps=cols, device=images.device).long()
+    gt = denormalize(images[0, idx], norm_params).clamp(0, 1)
+    rc = denormalize(out.x_rec[0, idx], norm_params).clamp(0, 1)
     grid = torch.cat([gt, rc], dim=0)
-    vutils.save_image(grid, os.path.join(artifact_dir, f"recon_epoch_{epoch:04d}.png"), nrow=t)
+    recon_name = f"{filename_prefix}recon_epoch_{epoch:04d}.png"
+    vutils.save_image(grid, os.path.join(artifact_dir, recon_name), nrow=cols)
 
     # Imagine rollout conditioned on actions
     imagined = model.imagine(images[0, 0].unsqueeze(0), actions[0])  # (T,C,H,W)
-    im = denormalize(imagined[:t], norm_params).clamp(0, 1)
+    im = denormalize(imagined[idx], norm_params).clamp(0, 1)
     grid2 = torch.cat([gt, im], dim=0)
-    vutils.save_image(grid2, os.path.join(artifact_dir, f"imagine_epoch_{epoch:04d}.png"), nrow=t)
+    imagine_name = f"{filename_prefix}imagine_epoch_{epoch:04d}.png"
+    vutils.save_image(grid2, os.path.join(artifact_dir, imagine_name), nrow=cols)
 
 
 def train_world_model(
@@ -77,6 +100,7 @@ def train_world_model(
     action_mode: str = "delta",
     kl_beta: float = 1.0,
     free_nats: float = 0.0,
+    action_mask_prob: float = 0.1,
     val_split: float = 0.1,
     device: str | torch.device = "auto",
     log_every: int = 10,
@@ -89,9 +113,18 @@ def train_world_model(
     preload_images: bool = False,
     preload_dtype: str = "float16",
     amp: bool = True,
+    reset_optimizer: bool = False,
     run_context: Optional[TrainingRunContext] = None,
 ):
     dev = _default_device(device)
+
+    # Accept percent inputs like 10 meaning 10%.
+    if val_split is not None and float(val_split) > 1.0:
+        if float(val_split) <= 100.0:
+            print(f"Interpreting val_split={val_split} as {float(val_split)/100.0:.3f} (percent -> fraction)")
+            val_split = float(val_split) / 100.0
+        else:
+            raise ValueError(f"val_split must be in (0,1) as a fraction, or <=100 as a percent; got {val_split}")
 
     if dev.type == "cuda":
         try:
@@ -143,6 +176,8 @@ def train_world_model(
         "action_mode": action_mode,
         "kl_beta": kl_beta,
         "free_nats": free_nats,
+        "action_mask_prob": action_mask_prob,
+        "reset_optimizer": bool(reset_optimizer),
     }
     save_manifest(artifact_dir, model_meta)
 
@@ -150,6 +185,8 @@ def train_world_model(
     print(f"Using device: {dev}")
 
     norm = get_default_normalization()
+    t0 = time.time()
+    print(f"Building dataset from: {data_dir}")
     dataset = ImageJointSequenceDataset(
         root_dir=data_dir,
         seq_len=seq_len,
@@ -163,12 +200,17 @@ def train_world_model(
         preload_images=preload_images,
         preload_dtype=preload_dtype,
     )
+    print(f"Dataset ready in {time.time() - t0:.1f}s")
+
+    print(f"Loaded world-model dataset: episodes={getattr(dataset, 'num_episodes', 1)} sequences={len(dataset)}")
 
     model_meta["joint_keys"] = dataset.joint_keys
     model_meta["action_dim"] = dataset.action_dim
+    model_meta["num_episodes"] = getattr(dataset, "num_episodes", 1)
+    model_meta["sequences"] = len(dataset)
     save_manifest(artifact_dir, model_meta)
 
-    # Train/val split: deterministic tail split like train_vae
+    # Train/val split: episode-aware tail split to avoid leakage across episodes.
     val_loader = None
     nw = int(num_workers)
     pm = bool(pin_memory) and (dev.type == "cuda")
@@ -185,14 +227,22 @@ def train_world_model(
 
     if val_split and 0.0 < val_split < 1.0:
         val_size = max(1, int(len(dataset) * val_split))
-        indices = list(range(len(dataset)))
-        train_indices = indices[:-val_size]
-        val_indices = indices[-val_size:]
+        episode_indices = list(range(getattr(dataset, "num_episodes", 1)))
+        val_ep = max(1, int(len(episode_indices) * val_split))
+        val_eps = set(episode_indices[-val_ep:])
+        windows = getattr(dataset, "windows", None) or []
+        train_indices = [i for i, (ep, _) in enumerate(windows) if ep not in val_eps]
+        val_indices = [i for i, (ep, _) in enumerate(windows) if ep in val_eps]
+        # fallback to size-based split if something went wrong
+        if not train_indices or not val_indices:
+            indices = list(range(len(dataset)))
+            train_indices = indices[:-val_size]
+            val_indices = indices[-val_size:]
         train_ds = Subset(dataset, train_indices)
         val_ds = Subset(dataset, val_indices)
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, **loader_kwargs)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **loader_kwargs)
-        print(f"Train/Val split: train={len(train_ds)} val={len(val_ds)}")
+        print(f"Train/Val split: train={len(train_ds)} val={len(val_ds)} (episodes val={len(val_eps)})")
     else:
         train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
 
@@ -225,7 +275,10 @@ def train_world_model(
         try:
             print(f"Resuming from checkpoint epoch {resume_ckpt.epoch}")
             world.load_state_dict(resume_ckpt.model_state)
-            optimizer.load_state_dict(resume_ckpt.optimizer_state)
+            if bool(reset_optimizer):
+                print("Resetting optimizer state (weights-only resume)")
+            else:
+                optimizer.load_state_dict(resume_ckpt.optimizer_state)
             start_epoch = resume_ckpt.epoch + 1
         except Exception as e:
             print(f"Failed to load resume checkpoint state: {e}")
@@ -240,10 +293,26 @@ def train_world_model(
         running_kld = 0.0
         n_batches = 0
 
+        # Keep one batch for debug images (varies per-epoch due to shuffle).
+        debug_images = None
+        debug_actions = None
+        val_debug_images = None
+        val_debug_actions = None
+
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}/{epochs}", leave=False)
         for step_idx, (images, actions) in enumerate(pbar, start=1):
             images = images.to(dev, non_blocking=True)
             actions = actions.to(dev, non_blocking=True)
+
+            if debug_images is None:
+                debug_images = images[:1].detach()
+                debug_actions = actions[:1].detach()
+
+            if action_mask_prob and action_mask_prob > 0:
+                mask = torch.rand(actions.shape[0], actions.shape[1], 1, device=actions.device) < float(
+                    action_mask_prob
+                )
+                actions = actions.masked_fill(mask, 0.0)
 
             optimizer.zero_grad()
             if use_amp:
@@ -283,8 +352,13 @@ def train_world_model(
             v_batches = 0
             with torch.no_grad():
                 for v_images, v_actions in val_loader:
-                    v_images = v_images.to(dev)
-                    v_actions = v_actions.to(dev)
+                    v_images = v_images.to(dev, non_blocking=True)
+                    v_actions = v_actions.to(dev, non_blocking=True)
+
+                    if val_debug_images is None:
+                        val_debug_images = v_images[:1].detach()
+                        val_debug_actions = v_actions[:1].detach()
+
                     v_out = world(v_images, v_actions)
                     v_loss += float(v_out.loss.detach().cpu())
                     v_batches += 1
@@ -312,10 +386,19 @@ def train_world_model(
 
         # Save a couple of debug images
         try:
-            batch_images, batch_actions = next(iter(train_loader))
-            batch_images = batch_images.to(dev)
-            batch_actions = batch_actions.to(dev)
-            _save_debug_images(artifact_dir, epoch, world, batch_images, batch_actions, dataset.norm_params)
+            if debug_images is not None and debug_actions is not None:
+                _save_debug_images(artifact_dir, epoch, world, debug_images, debug_actions, dataset.norm_params)
+
+            if val_debug_images is not None and val_debug_actions is not None:
+                _save_debug_images(
+                    artifact_dir,
+                    epoch,
+                    world,
+                    val_debug_images,
+                    val_debug_actions,
+                    dataset.norm_params,
+                    filename_prefix="val_",
+                )
         except Exception as e:
             print(f"Could not save debug images: {e}")
 

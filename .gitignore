@@ -559,3 +559,6 @@ MigrationBackup/
 .ionide/
 
 
+
+
+.DS_Store
