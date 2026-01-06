@@ -61,23 +61,24 @@ SO101/
 ### Setup
 
 1. **Clone the repository with submodules:**
+
    ```bash
    git clone --recursive https://github.com/Epic-Eric/SO101.git
    cd SO101
    ```
-
 2. **Create a virtual environment (recommended):**
+
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
    ```
-
 3. **Install dependencies:**
+
    ```bash
    pip install -r requirements.txt
    ```
-
 4. **Install the model package:**
+
    ```bash
    pip install -e ./model
    ```
@@ -93,6 +94,7 @@ python collect_data.py
 ```
 
 This will:
+
 - Start a teleoperation session
 - Capture images for 30 seconds (configurable)
 - Save images to `data/captured_images/`
@@ -107,11 +109,13 @@ python train_model.py [data_dir] [output_dir] [options]
 ```
 
 **Example:**
+
 ```bash
 python train_model.py ./data/captured_images ./output --epochs 480 --batch_size 128 --lr 0.002
 ```
 
 **Arguments:**
+
 - `data_dir`: Directory containing training images (jpg/png)
 - `output_dir`: Output directory for checkpoints and reconstructions
 - `--epochs`: Number of training epochs (default: from config.yml)
@@ -136,7 +140,7 @@ python run_app.py world_collect   # World-model data collection UI
 
 - Set hardware env vars (e.g., `export FOLLOWER_PORT=/dev/ttyUSB0`; optional `export LEADER_PORT=/dev/ttyUSB1` for teleoperation follow mode).
 - Run:
-  
+
   ```bash
   python collect_image_and_joint.py
   ```
@@ -149,6 +153,7 @@ python train_world_model.py data/captured_images_and_joints ./output --seq_len 1
 ```
 
 Arguments fall back to `config.yml`:
+
 - `data_dir` uses `world_data_dir` from config.yml, falling back to the general `data_dir` if `world_data_dir` is not configured.
 - `out_dir` uses `world_out_dir`; if `world_out_dir` is not configured, it uses the general `out_dir` value from config.yml.
 - Hyperparameters honor `world_*` overrides such as `world_epochs`, `world_batch_size`, `world_lr`, and `world_latent_dim`.
@@ -183,6 +188,7 @@ The project uses a **Variational Autoencoder (VAE)** architecture for learning c
 - **Decoder**: Reconstructs images from latent representations
 
 This is useful for:
+
 - Dimensionality reduction
 - Feature extraction for robot control
 - Sim-to-real transfer learning
@@ -190,17 +196,22 @@ This is useful for:
 ## 🎮 Components
 
 ### 1. Data Collection (`collect_data.py`)
+
 Uses teleoperation to collect images with metadata, leveraging the `model.src.data.collect_images_with_teleoperation` function.
 
 ### 2. VAE Training (`train_model.py`)
+
 Trains a VAE on collected images with:
+
 - Automatic device selection (MPS/CUDA/CPU)
 - Checkpoint saving
 - Training metrics tracking
 - Image reconstruction visualization
 
 ### 3. Model Package (`model/`)
+
 A standalone Python package providing:
+
 - VAE model implementations
 - Training utilities
 - Data loading and preprocessing
@@ -242,7 +253,8 @@ MIT - See LICENSE for details
 
 ## 👥 Authors
 
-- ericx
+- Eric Xie
+- Hayson Cheung (hayson.cheung@mail.utoronto.ca)
 
 ## 🙏 Acknowledgments
 
