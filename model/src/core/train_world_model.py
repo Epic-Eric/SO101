@@ -317,7 +317,7 @@ def train_world_model(
     def _beta_at_epoch(ep: int) -> float:
         if warmup_epochs <= 0:
             return float(kl_beta)
-        progress = max(0.0, float(ep - 1)) / float(warmup_epochs)
+        progress = max(0.0, float(ep)) / float(warmup_epochs)
         return float(kl_beta) * min(1.0, progress)
 
     # Early stopping/checkpointing is keyed to training 1-step latent MSE, not validation loss.
