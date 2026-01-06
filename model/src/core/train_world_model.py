@@ -326,8 +326,10 @@ def train_world_model(
     if existing_best:
         try:
             best_metric = float(min(existing_best))
-        except Exception:
-            pass
+        except (TypeError, ValueError) as e:
+            # If historical metrics are malformed, fall back to the default best_metric and continue.
+            print(f"Warning: could not determine existing best one_step_mse from history: {e}")
+            best_metric = float("inf")
     best_path = None
 
     for epoch in tqdm(range(start_epoch, epochs + 1), desc="Epochs", unit="epoch"):
