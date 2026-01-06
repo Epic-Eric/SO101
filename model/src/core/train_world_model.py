@@ -127,7 +127,7 @@ def train_world_model(
     - Applies a linear KL warmup schedule (beta from 0 to kl_beta over warmup_epochs).
     - Uses loss-gated RSSM updates to conditionally detach encoder latents when 1-step error is high.
     - Tracks latent-space diagnostics (1-step MSE, short-horizon rollout error, drift, raw KL).
-    Checkpoint selection/early stopping is keyed to training 1-step latent MSE, not validation loss,
+    Best checkpoint selection is keyed to training 1-step latent MSE, not validation loss,
     to better reflect RSSM accuracy in latent space.
     """
     dev = _default_device(device)
