@@ -141,6 +141,7 @@ def main():
     rssm_gate_threshold = (
         args.rssm_gate_threshold if args.rssm_gate_threshold is not None else float(cfg.get("rssm_gate_threshold", 0.25))
     )
+    # Accept both rollout_horizon and legacy short_rollout_horizon config keys.
     rollout_horizon = args.rollout_horizon if args.rollout_horizon is not None else int(cfg.get("rollout_horizon", cfg.get("short_rollout_horizon", 3)))
     val_split = args.val_split if args.val_split is not None else float(cfg.get("val_split", 0.1))
     # Accept percent inputs like 10 meaning 10%.

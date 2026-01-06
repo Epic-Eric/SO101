@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from model.src.models.rssm import RSSM
+from model.src.models.rssm import RSSM, RSSMState
 from model.src.models.vae_strong import VAEStrong
 
 
@@ -80,13 +81,17 @@ class WorldModel(nn.Module):
             min_std=min_std,
         )
 
+    def _make_state(self, h: torch.Tensor, z: torch.Tensor) -> RSSMState:
+        """Centralize RSSMState construction so call sites remain consistent if the state schema evolves."""
+        return RSSMState(h=h, z=z)
+
     def forward(
         self,
         images: torch.Tensor,
         actions: torch.Tensor,
-        kl_beta_override: float | None = None,
-        rssm_gate_threshold: float | None = None,
-        short_roll_horizon: int | None = None,
+        kl_beta_override: Optional[float] = None,
+        rssm_gate_threshold: Optional[float] = None,
+        short_roll_horizon: Optional[int] = None,
     ) -> WorldModelOutput:
         """Compute losses for a batch.
 
@@ -115,7 +120,7 @@ class WorldModel(nn.Module):
 
         # RSSM KL loss
         state = self.rssm.init_state(b, device=images.device)
-        state = type(state)(h=state.h, z=mu[:, 0])
+        state = self._make_state(state.h, mu[:, 0])
         kls = []
         kls_raw = []
         one_step_errors = []
@@ -137,9 +142,9 @@ class WorldModel(nn.Module):
                 gate_prior_mu, gate_prior_logvar = self.rssm.prior_params(gate_h)
                 one_step_err = F.mse_loss(gate_prior_mu, mu[:, i], reduction="none").mean(dim=-1)
             gate_mask = one_step_err > gate_tau
-            z_dyn = torch.where(gate_mask.unsqueeze(-1), prev_mean.detach(), prev_mean)
+            z_for_dynamics = torch.where(gate_mask.unsqueeze(-1), prev_mean.detach(), prev_mean)
 
-            x = self.rssm.inp(torch.cat([z_dyn, actions[:, i - 1]], dim=-1))
+            x = self.rssm.inp(torch.cat([z_for_dynamics, actions[:, i - 1]], dim=-1))
             h_next = self.rssm.gru(x, state.h)
             prior_mu, prior_logvar = self.rssm.prior_params(h_next)
 
@@ -149,8 +154,8 @@ class WorldModel(nn.Module):
             kls_raw.append(kl_i.detach())
 
             # advance state deterministically; stochastic sample used for next step input only
-            state = type(state)(h=h_next, z=post_mu)
-            states_for_rollout.append(type(state)(h=h_next.detach(), z=post_mu.detach()))
+            state = self._make_state(h_next, post_mu)
+            states_for_rollout.append(self._make_state(h_next.detach(), post_mu.detach()))
             one_step_errors.append(one_step_err)
             latent_diffs.append((mu[:, i] - mu[:, i - 1]).abs().mean(dim=-1))
 
@@ -181,16 +186,18 @@ class WorldModel(nn.Module):
         # short-horizon rollout error in latent space
         rollout_errors = []
         if roll_h > 0:
+            # t >= 2 is enforced above; horizon is capped accordingly
             horizon = min(roll_h, max(1, t - 1))
             with torch.no_grad():
+                # horizon is capped at (t-1), so t - horizon is at least 1 when t >= 2
                 for start in range(0, t - horizon):
                     roll_state = states_for_rollout[start]
-                    roll_state = type(roll_state)(h=roll_state.h.detach(), z=roll_state.z.detach())
+                    roll_state = self._make_state(roll_state.h.detach(), roll_state.z.detach())
                     for k in range(1, horizon + 1):
                         roll_state, (mu_p, logvar_p) = self.rssm.step(roll_state, actions[:, start + k - 1])
                         target_mu = mu[:, start + k]
                         rollout_errors.append(F.mse_loss(mu_p, target_mu, reduction="none").mean(dim=-1))
-                        roll_state = type(roll_state)(h=roll_state.h, z=mu_p)
+                        roll_state = self._make_state(roll_state.h, mu_p)
         rollout_mse = torch.stack(rollout_errors, dim=0).mean() if rollout_errors else torch.tensor(0.0, device=images.device)
 
         return WorldModelOutput(
@@ -225,7 +232,7 @@ class WorldModel(nn.Module):
         imgs = [self.vae.decode(z0).squeeze(0)]
 
         state = self.rssm.init_state(batch_size=1, device=start_image.device)
-        state = type(state)(h=state.h, z=z0)
+        state = self._make_state(state.h, z0)
 
         for i in range(1, t):
             state, (mu_p, logvar_p) = self.rssm.step(state, actions[i - 1].unsqueeze(0))

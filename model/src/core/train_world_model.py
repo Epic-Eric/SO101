@@ -3,7 +3,7 @@ import json
 import uuid
 import time
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -24,8 +24,11 @@ from model.src.utils.saving import (
 from model.src.core.run_context import TrainingRunContext, prepare_run_context
 from model.src.models.world_model import WorldModel
 
+# Default warmup spans ~35% of training per recommended 30–40% range from spec.
+DEFAULT_KL_WARMUP_FRAC = 0.35
 
-def _default_device(device: str | torch.device) -> torch.device:
+
+def _default_device(device: Union[str, torch.device]) -> torch.device:
     if device == "auto":
         if torch.backends.mps.is_available():
             return torch.device("mps")
@@ -99,13 +102,13 @@ def train_world_model(
     image_size: int = 64,
     action_mode: str = "delta",
     kl_beta: float = 1.0,
-    kl_warmup_epochs: int | None = None,
+    kl_warmup_epochs: Optional[int] = None,
     free_nats: float = 0.0,
     rssm_gate_threshold: float = 0.25,
     short_roll_horizon: int = 3,
     action_mask_prob: float = 0.1,
     val_split: float = 0.1,
-    device: str | torch.device = "auto",
+    device: Union[str, torch.device] = "auto",
     log_every: int = 10,
     num_workers: int = 2,
     prefetch_factor: int = 2,
@@ -119,6 +122,14 @@ def train_world_model(
     reset_optimizer: bool = False,
     run_context: Optional[TrainingRunContext] = None,
 ):
+    """Train the VAE+RSSM world model with KL warmup, RSSM gating, and expanded metrics.
+
+    - Applies a linear KL warmup schedule (beta from 0 to kl_beta over warmup_epochs).
+    - Uses loss-gated RSSM updates to conditionally detach encoder latents when 1-step error is high.
+    - Tracks latent-space diagnostics (1-step MSE, short-horizon rollout error, drift, raw KL).
+    Checkpoint selection/early stopping is keyed to training 1-step latent MSE, not validation loss,
+    to better reflect RSSM accuracy in latent space.
+    """
     dev = _default_device(device)
 
     # Accept percent inputs like 10 meaning 10%.
@@ -252,7 +263,7 @@ def train_world_model(
     else:
         train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
 
-    warmup_epochs = int(kl_warmup_epochs) if kl_warmup_epochs is not None else max(1, int(epochs * 0.35))
+    warmup_epochs = int(kl_warmup_epochs) if kl_warmup_epochs is not None else max(1, int(epochs * DEFAULT_KL_WARMUP_FRAC))
     warmup_epochs = max(1, min(warmup_epochs, epochs))
     short_roll_horizon = max(1, int(short_roll_horizon))
     model_meta["kl_warmup_epochs"] = warmup_epochs
@@ -309,6 +320,7 @@ def train_world_model(
         progress = max(0.0, float(ep - 1)) / float(warmup_epochs)
         return float(kl_beta) * min(1.0, progress)
 
+    # Early stopping/checkpointing is keyed to training 1-step latent MSE, not validation loss.
     best_metric = float("inf")
     existing_best = [getattr(m, "one_step_mse", None) for m in all_metrics if getattr(m, "one_step_mse", None) is not None]
     if existing_best:

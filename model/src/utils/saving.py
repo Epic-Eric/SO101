@@ -7,6 +7,26 @@ from typing import List, Optional, Dict
 from model.src.interfaces.training import EpochMetrics, TrainingSummary, Checkpoint
 
 
+def _parse_optional_float(value) -> Optional[float]:
+    if value in (None, "", "None"):
+        return None
+    try:
+        return float(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_optional_int(value) -> Optional[int]:
+    if value in (None, "", "None"):
+        return None
+    for conv in (int, lambda x: int(float(x))):
+        try:
+            return conv(value)
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
 def ensure_dir(path: str):
     os.makedirs(path, exist_ok=True)
 
@@ -108,15 +128,15 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
                         loss=float(r.get("loss")),
                         rec_loss=float(r.get("rec_loss")),
                         kld=float(r.get("kld")),
-                        val_loss=(float(r.get("val_loss")) if r.get("val_loss") is not None else None),
-                        kld_raw=(float(r.get("kld_raw")) if r.get("kld_raw") is not None else None),
-                        one_step_mse=(float(r.get("one_step_mse")) if r.get("one_step_mse") is not None else None),
-                        rollout_mse=(float(r.get("rollout_mse")) if r.get("rollout_mse") is not None else None),
-                        latent_drift=(float(r.get("latent_drift")) if r.get("latent_drift") is not None else None),
-                        val_one_step_mse=(float(r.get("val_one_step_mse")) if r.get("val_one_step_mse") is not None else None),
-                        beta=(float(r.get("beta")) if r.get("beta") is not None else None),
-                        rollout_horizon=(int(r.get("rollout_horizon")) if r.get("rollout_horizon") is not None else None),
-                        gate_threshold=(float(r.get("gate_threshold")) if r.get("gate_threshold") is not None else None),
+                        val_loss=_parse_optional_float(r.get("val_loss")),
+                        kld_raw=_parse_optional_float(r.get("kld_raw")),
+                        one_step_mse=_parse_optional_float(r.get("one_step_mse")),
+                        rollout_mse=_parse_optional_float(r.get("rollout_mse")),
+                        latent_drift=_parse_optional_float(r.get("latent_drift")),
+                        val_one_step_mse=_parse_optional_float(r.get("val_one_step_mse")),
+                        beta=_parse_optional_float(r.get("beta")),
+                        rollout_horizon=_parse_optional_int(r.get("rollout_horizon")),
+                        gate_threshold=_parse_optional_float(r.get("gate_threshold")),
                     )
                 )
         except Exception:
@@ -133,28 +153,12 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
                     parts = line.strip().split(",")
                     if len(parts) < 4:
                         continue
-                    row = {header[i]: parts[i] for i in range(min(len(header), len(parts)))}
+                    row = {hdr: (parts[i] if i < len(parts) else "") for i, hdr in enumerate(header)}
                     epoch = int(row.get("epoch"))
                     loss = float(row.get("loss"))
                     rec_loss = float(row.get("rec_loss"))
                     kld = float(row.get("kld"))
                     val_loss = float(row.get("val_loss")) if row.get("val_loss") not in (None, "", "None") else None
-                    def _to_float_optional(key: str):
-                        v = row.get(key)
-                        if v is None or v == "":
-                            return None
-                        try:
-                            return float(v)
-                        except Exception:
-                            return None
-                    def _to_int_optional(key: str):
-                        v = row.get(key)
-                        if v is None or v == "":
-                            return None
-                        try:
-                            return int(float(v))
-                        except Exception:
-                            return None
                     out.append(
                         EpochMetrics(
                             epoch=epoch,
@@ -162,14 +166,14 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
                             rec_loss=rec_loss,
                             kld=kld,
                             val_loss=val_loss,
-                            kld_raw=_to_float_optional("kld_raw"),
-                            one_step_mse=_to_float_optional("one_step_mse"),
-                            rollout_mse=_to_float_optional("rollout_mse"),
-                            latent_drift=_to_float_optional("latent_drift"),
-                            val_one_step_mse=_to_float_optional("val_one_step_mse"),
-                            beta=_to_float_optional("beta"),
-                            rollout_horizon=_to_int_optional("rollout_horizon"),
-                            gate_threshold=_to_float_optional("gate_threshold"),
+                            kld_raw=_parse_optional_float(row.get("kld_raw")),
+                            one_step_mse=_parse_optional_float(row.get("one_step_mse")),
+                            rollout_mse=_parse_optional_float(row.get("rollout_mse")),
+                            latent_drift=_parse_optional_float(row.get("latent_drift")),
+                            val_one_step_mse=_parse_optional_float(row.get("val_one_step_mse")),
+                            beta=_parse_optional_float(row.get("beta")),
+                            rollout_horizon=_parse_optional_int(row.get("rollout_horizon")),
+                            gate_threshold=_parse_optional_float(row.get("gate_threshold")),
                         )
                     )
         except Exception:
