@@ -1,13 +1,15 @@
 # SO101 - Sim-to-Real Robot Learning
 
 [![Python](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/license-Proprietary-red.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/Epic-Eric/SO101.svg?style=social&label=Star)](https://github.com/Epic-Eric/SO101)
 [![GitHub forks](https://img.shields.io/github/forks/Epic-Eric/SO101.svg?style=social&label=Fork)](https://github.com/Epic-Eric/SO101)
 [![Last Commit](https://img.shields.io/github/last-commit/Epic-Eric/SO101)](https://github.com/Epic-Eric/SO101/commits)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.7+-ee4c2c?logo=pytorch&logoColor=white)](https://pytorch.org/)
 
 A robotics project focused on sim-to-real transfer learning using Variational Autoencoders (VAE) for visual representation learning and teleoperation data collection.
+
+SO101 aims to provide a practical, reproducible pipeline for sim-to-real robot learning experiments, from data collection to world-model visualization.
 
 > **Status:** Work in progress; APIs, configs, and workflows may change as development continues.
 
@@ -236,7 +238,7 @@ python test_use/teleop/teleop_api.py
 
 ## 📝 License
 
-Proprietary - See LICENSE for details
+MIT - See LICENSE for details
 
 ## 👥 Authors
 
