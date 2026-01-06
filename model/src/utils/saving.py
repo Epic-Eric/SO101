@@ -154,11 +154,15 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
                     if len(parts) < 4:
                         continue
                     row = {hdr: (parts[i] if i < len(parts) else "") for i, hdr in enumerate(header)}
-                    epoch = int(row.get("epoch"))
-                    loss = float(row.get("loss"))
-                    rec_loss = float(row.get("rec_loss"))
-                    kld = float(row.get("kld"))
-                    val_loss = float(row.get("val_loss")) if row.get("val_loss") not in (None, "", "None") else None
+                    try:
+                        epoch = int(row.get("epoch"))
+                        loss = float(row.get("loss"))
+                        rec_loss = float(row.get("rec_loss"))
+                        kld = float(row.get("kld"))
+                        val_loss = _parse_optional_float(row.get("val_loss"))
+                    except (TypeError, ValueError):
+                        # Skip rows with malformed required numeric fields
+                        continue
                     out.append(
                         EpochMetrics(
                             epoch=epoch,
