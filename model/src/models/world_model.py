@@ -128,7 +128,7 @@ class WorldModel(nn.Module):
         state_for_rollout = self._make_state(state.h.detach(), mu[:, 0].detach())
         states_for_rollout = [state_for_rollout]
         gate_tau = float(self.rssm_gate_threshold if rssm_gate_threshold is None else rssm_gate_threshold)
-        roll_h = int(self.short_roll_horizon if short_roll_horizon is None else short_roll_horizon)
+        rollout_horizon = int(self.short_roll_horizon if short_roll_horizon is None else short_roll_horizon)
 
         # t = 0 KL against standard normal
         kls.append(_standard_normal_kl(mu[:, 0], logvar[:, 0]))
