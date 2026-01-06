@@ -15,6 +15,11 @@ class WorldModelOutput:
     loss: torch.Tensor
     rec_loss: torch.Tensor
     kld: torch.Tensor
+    kld_raw: torch.Tensor
+    one_step_mse: torch.Tensor
+    rollout_mse: torch.Tensor
+    latent_drift: torch.Tensor
+    kl_beta: torch.Tensor
     x_rec: torch.Tensor  # (B,T,C,H,W)
 
 
@@ -46,10 +51,14 @@ class WorldModel(nn.Module):
         kl_beta: float = 1.0,
         free_nats: float = 0.0,
         min_std: float = 0.1,
+        rssm_gate_threshold: float = 0.25,
+        short_roll_horizon: int = 3,
     ):
         super().__init__()
         self.kl_beta = float(kl_beta)
         self.free_nats = float(free_nats)
+        self.rssm_gate_threshold = float(rssm_gate_threshold)
+        self.short_roll_horizon = int(short_roll_horizon)
 
         self.vae = VAEStrong(
             in_channels=3,
@@ -71,7 +80,14 @@ class WorldModel(nn.Module):
             min_std=min_std,
         )
 
-    def forward(self, images: torch.Tensor, actions: torch.Tensor) -> WorldModelOutput:
+    def forward(
+        self,
+        images: torch.Tensor,
+        actions: torch.Tensor,
+        kl_beta_override: float | None = None,
+        rssm_gate_threshold: float | None = None,
+        short_roll_horizon: int | None = None,
+    ) -> WorldModelOutput:
         """Compute losses for a batch.
 
         images:  (B,T,C,H,W)
@@ -99,36 +115,95 @@ class WorldModel(nn.Module):
 
         # RSSM KL loss
         state = self.rssm.init_state(b, device=images.device)
+        state = type(state)(h=state.h, z=mu[:, 0])
         kls = []
+        kls_raw = []
+        one_step_errors = []
+        latent_diffs = []
+        states_for_rollout = [state]
+        gate_tau = float(self.rssm_gate_threshold if rssm_gate_threshold is None else rssm_gate_threshold)
+        roll_h = int(self.short_roll_horizon if short_roll_horizon is None else short_roll_horizon)
 
         # t = 0 KL against standard normal
         kls.append(_standard_normal_kl(mu[:, 0], logvar[:, 0]))
+        kls_raw.append(kls[-1])
 
         for i in range(1, t):
-            # transition using previous posterior sample
-            prev_z = self.vae.reparameterize(mu[:, i - 1], logvar[:, i - 1])
-            state = type(state)(h=state.h, z=prev_z)  # keep h, replace z
-            x = self.rssm.inp(torch.cat([state.z, actions[:, i - 1]], dim=-1))
+            prev_mean = mu[:, i - 1]
+
+            with torch.no_grad():
+                gate_x = self.rssm.inp(torch.cat([prev_mean.detach(), actions[:, i - 1]], dim=-1))
+                gate_h = self.rssm.gru(gate_x, state.h.detach())
+                gate_prior_mu, gate_prior_logvar = self.rssm.prior_params(gate_h)
+                one_step_err = F.mse_loss(gate_prior_mu, mu[:, i], reduction="none").mean(dim=-1)
+            gate_mask = one_step_err > gate_tau
+            z_dyn = torch.where(gate_mask.unsqueeze(-1), prev_mean.detach(), prev_mean)
+
+            x = self.rssm.inp(torch.cat([z_dyn, actions[:, i - 1]], dim=-1))
             h_next = self.rssm.gru(x, state.h)
             prior_mu, prior_logvar = self.rssm.prior_params(h_next)
 
             post_mu, post_logvar = mu[:, i], logvar[:, i]
             kl_i = self.rssm.kl(post_mu, post_logvar, prior_mu, prior_logvar)
             kls.append(kl_i)
+            kls_raw.append(kl_i.detach())
 
             # advance state deterministically; stochastic sample used for next step input only
-            post_z = self.vae.reparameterize(post_mu, post_logvar)
-            state = type(state)(h=h_next, z=post_z)
+            state = type(state)(h=h_next, z=post_mu)
+            states_for_rollout.append(type(state)(h=h_next.detach(), z=post_mu.detach()))
+            one_step_errors.append(one_step_err)
+            latent_diffs.append((mu[:, i] - mu[:, i - 1]).abs().mean(dim=-1))
 
-        kld = torch.stack(kls, dim=1).mean()  # average over time & batch
+        kls_tensor = torch.stack(kls, dim=1)
+        kld_raw = kls_tensor.mean()
+        kld = kld_raw  # average over time & batch
         if self.free_nats > 0:
             # free nats is applied per-step per-sample, then averaged
-            kls_t = torch.stack(kls, dim=1)  # (B,T)
+            kls_t = kls_tensor  # (B,T)
             kls_t = torch.clamp(kls_t, min=self.free_nats)
             kld = kls_t.mean()
 
-        loss = rec_loss + self.kl_beta * kld
-        return WorldModelOutput(loss=loss, rec_loss=rec_loss.detach(), kld=kld.detach(), x_rec=x_rec.detach())
+        beta = torch.tensor(self.kl_beta if kl_beta_override is None else kl_beta_override, device=images.device)
+        loss = rec_loss + beta * kld
+
+        # 1-step latent prediction error (mean over batch/time)
+        if one_step_errors:
+            one_step_mse = torch.stack(one_step_errors, dim=1).mean()
+        else:
+            one_step_mse = torch.tensor(0.0, device=images.device)
+
+        # latent drift metric E[|z_t - z_{t-1}|]
+        if latent_diffs:
+            latent_drift = torch.stack(latent_diffs, dim=1).mean()
+        else:
+            latent_drift = torch.tensor(0.0, device=images.device)
+
+        # short-horizon rollout error in latent space
+        rollout_errors = []
+        if roll_h > 0:
+            horizon = min(roll_h, max(1, t - 1))
+            with torch.no_grad():
+                for start in range(0, t - horizon):
+                    roll_state = states_for_rollout[start]
+                    roll_state = type(roll_state)(h=roll_state.h.detach(), z=roll_state.z.detach())
+                    for k in range(1, horizon + 1):
+                        roll_state, (mu_p, logvar_p) = self.rssm.step(roll_state, actions[:, start + k - 1])
+                        target_mu = mu[:, start + k]
+                        rollout_errors.append(F.mse_loss(mu_p, target_mu, reduction="none").mean(dim=-1))
+                        roll_state = type(roll_state)(h=roll_state.h, z=mu_p)
+        rollout_mse = torch.stack(rollout_errors, dim=0).mean() if rollout_errors else torch.tensor(0.0, device=images.device)
+
+        return WorldModelOutput(
+            loss=loss,
+            rec_loss=rec_loss.detach(),
+            kld=kld.detach(),
+            kld_raw=kld_raw.detach(),
+            one_step_mse=one_step_mse.detach(),
+            rollout_mse=rollout_mse.detach(),
+            latent_drift=latent_drift.detach(),
+            kl_beta=beta.detach(),
+            x_rec=x_rec.detach(),
+        )
 
     @torch.no_grad()
     def imagine(self, start_image: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:

@@ -99,7 +99,10 @@ def train_world_model(
     image_size: int = 64,
     action_mode: str = "delta",
     kl_beta: float = 1.0,
+    kl_warmup_epochs: int | None = None,
     free_nats: float = 0.0,
+    rssm_gate_threshold: float = 0.25,
+    short_roll_horizon: int = 3,
     action_mask_prob: float = 0.1,
     val_split: float = 0.1,
     device: str | torch.device = "auto",
@@ -175,8 +178,11 @@ def train_world_model(
         "image_size": image_size,
         "action_mode": action_mode,
         "kl_beta": kl_beta,
+        "kl_warmup_epochs": kl_warmup_epochs if kl_warmup_epochs is not None else "auto",
         "free_nats": free_nats,
         "action_mask_prob": action_mask_prob,
+        "rssm_gate_threshold": rssm_gate_threshold,
+        "short_roll_horizon": short_roll_horizon,
         "reset_optimizer": bool(reset_optimizer),
     }
     save_manifest(artifact_dir, model_meta)
@@ -246,6 +252,13 @@ def train_world_model(
     else:
         train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
 
+    warmup_epochs = int(kl_warmup_epochs) if kl_warmup_epochs is not None else max(1, int(epochs * 0.35))
+    warmup_epochs = max(1, min(warmup_epochs, epochs))
+    short_roll_horizon = max(1, int(short_roll_horizon))
+    model_meta["kl_warmup_epochs"] = warmup_epochs
+    model_meta["short_roll_horizon"] = short_roll_horizon
+    model_meta["rssm_gate_threshold"] = rssm_gate_threshold
+
     # World model
     world = WorldModel(
         action_dim=dataset.action_dim,
@@ -256,7 +269,14 @@ def train_world_model(
         output_activation="tanh",
         kl_beta=kl_beta,
         free_nats=free_nats,
+        rssm_gate_threshold=rssm_gate_threshold,
+        short_roll_horizon=short_roll_horizon,
     ).to(dev)
+    print(
+        f"KL beta schedule: 0 -> {kl_beta} over {warmup_epochs} epochs | "
+        f"RSSM gate τ={rssm_gate_threshold} | rollout_horizon={short_roll_horizon}"
+    )
+    print("Checkpointing/early-stopping keyed to train 1-step latent MSE; validation total loss is not used.")
 
     optimizer = torch.optim.Adam(world.parameters(), lr=lr)
     use_amp = bool(amp) and dev.type == "cuda"
@@ -283,14 +303,31 @@ def train_world_model(
         except Exception as e:
             print(f"Failed to load resume checkpoint state: {e}")
 
-    best_loss = float("inf")
+    def _beta_at_epoch(ep: int) -> float:
+        if warmup_epochs <= 0:
+            return float(kl_beta)
+        progress = max(0.0, float(ep - 1)) / float(warmup_epochs)
+        return float(kl_beta) * min(1.0, progress)
+
+    best_metric = float("inf")
+    existing_best = [getattr(m, "one_step_mse", None) for m in all_metrics if getattr(m, "one_step_mse", None) is not None]
+    if existing_best:
+        try:
+            best_metric = float(min(existing_best))
+        except Exception:
+            pass
     best_path = None
 
     for epoch in tqdm(range(start_epoch, epochs + 1), desc="Epochs", unit="epoch"):
         world.train()
+        beta_now = _beta_at_epoch(epoch)
         running_loss = 0.0
         running_rec = 0.0
         running_kld = 0.0
+        running_kld_raw = 0.0
+        running_one_step = 0.0
+        running_rollout = 0.0
+        running_drift = 0.0
         n_batches = 0
 
         # Keep one batch for debug images (varies per-epoch due to shuffle).
@@ -317,18 +354,34 @@ def train_world_model(
             optimizer.zero_grad()
             if use_amp:
                 with torch.cuda.amp.autocast(dtype=torch.float16):
-                    out = world(images, actions)
+                    out = world(
+                        images,
+                        actions,
+                        kl_beta_override=beta_now,
+                        rssm_gate_threshold=rssm_gate_threshold,
+                        short_roll_horizon=short_roll_horizon,
+                    )
                 scaler.scale(out.loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
             else:
-                out = world(images, actions)
+                out = world(
+                    images,
+                    actions,
+                    kl_beta_override=beta_now,
+                    rssm_gate_threshold=rssm_gate_threshold,
+                    short_roll_horizon=short_roll_horizon,
+                )
                 out.loss.backward()
                 optimizer.step()
 
             running_loss += float(out.loss.detach().cpu())
             running_rec += float(out.rec_loss.detach().cpu())
             running_kld += float(out.kld.detach().cpu())
+            running_kld_raw += float(out.kld_raw.detach().cpu())
+            running_one_step += float(out.one_step_mse.detach().cpu())
+            running_rollout += float(out.rollout_mse.detach().cpu())
+            running_drift += float(out.latent_drift.detach().cpu())
             n_batches += 1
 
             if log_every and (step_idx % max(1, int(log_every)) == 0 or step_idx == 1):
@@ -337,18 +390,25 @@ def train_world_model(
                         "loss": f"{(running_loss / n_batches):.3f}",
                         "rec": f"{(running_rec / n_batches):.3f}",
                         "kld": f"{(running_kld / n_batches):.3f}",
+                        "1step": f"{(running_one_step / n_batches):.3f}",
                     }
                 )
 
         epoch_loss = running_loss / max(1, n_batches)
         epoch_rec = running_rec / max(1, n_batches)
         epoch_kld = running_kld / max(1, n_batches)
+        epoch_kld_raw = running_kld_raw / max(1, n_batches)
+        epoch_one_step = running_one_step / max(1, n_batches)
+        epoch_rollout = running_rollout / max(1, n_batches)
+        epoch_drift = running_drift / max(1, n_batches)
 
         # Validation
         val_loss = None
+        val_one_step = None
         if val_loader is not None:
             world.eval()
             v_loss = 0.0
+            v_one_step = 0.0
             v_batches = 0
             with torch.no_grad():
                 for v_images, v_actions in val_loader:
@@ -359,12 +419,34 @@ def train_world_model(
                         val_debug_images = v_images[:1].detach()
                         val_debug_actions = v_actions[:1].detach()
 
-                    v_out = world(v_images, v_actions)
+                    v_out = world(
+                        v_images,
+                        v_actions,
+                        kl_beta_override=beta_now,
+                        rssm_gate_threshold=rssm_gate_threshold,
+                        short_roll_horizon=short_roll_horizon,
+                    )
                     v_loss += float(v_out.loss.detach().cpu())
+                    v_one_step += float(v_out.one_step_mse.detach().cpu())
                     v_batches += 1
             val_loss = v_loss / max(1, v_batches)
+            val_one_step = v_one_step / max(1, v_batches) if v_batches > 0 else None
 
-        metric = EpochMetrics(epoch=epoch, loss=epoch_loss, rec_loss=epoch_rec, kld=epoch_kld, val_loss=val_loss)
+        metric = EpochMetrics(
+            epoch=epoch,
+            loss=epoch_loss,
+            rec_loss=epoch_rec,
+            kld=epoch_kld,
+            kld_raw=epoch_kld_raw,
+            one_step_mse=epoch_one_step,
+            rollout_mse=epoch_rollout,
+            latent_drift=epoch_drift,
+            val_loss=val_loss,
+            val_one_step_mse=val_one_step,
+            beta=beta_now,
+            rollout_horizon=short_roll_horizon,
+            gate_threshold=rssm_gate_threshold,
+        )
         all_metrics.append(metric)
         append_epoch_metric(artifact_dir, metric)
 
@@ -375,8 +457,8 @@ def train_world_model(
             filename="checkpoint_latest.pt",
         )
 
-        if epoch_loss < best_loss:
-            best_loss = epoch_loss
+        if epoch_one_step < best_metric:
+            best_metric = epoch_one_step
             best_path = save_checkpoint(
                 artifact_dir,
                 Checkpoint(epoch=epoch, model_state=world.state_dict(), optimizer_state=optimizer.state_dict(), extras={}),
@@ -403,8 +485,11 @@ def train_world_model(
             print(f"Could not save debug images: {e}")
 
         print(
-            f"Epoch {epoch}/{epochs} | loss={epoch_loss:.4f} rec={epoch_rec:.4f} kld={epoch_kld:.4f}"
-            + (f" val={val_loss:.4f}" if val_loss is not None else "")
+            f"Epoch {epoch}/{epochs} | beta={beta_now:.3f} "
+            f"loss={epoch_loss:.4f} rec={epoch_rec:.4f} kld={epoch_kld:.4f} kld_raw={epoch_kld_raw:.4f} "
+            f"1step={epoch_one_step:.4f} roll@{short_roll_horizon}={epoch_rollout:.4f} drift={epoch_drift:.4f}"
+            + (f" val_loss={val_loss:.4f}" if val_loss is not None else "")
+            + (f" val_1step={val_one_step:.4f}" if val_one_step is not None else "")
         )
 
     final_model_path = save_final_model(artifact_dir, world.state_dict(), metadata=model_meta)

@@ -41,7 +41,15 @@ def save_epoch_metrics(out_dir: str, metrics: List[EpochMetrics]):
             "loss": float(m.loss),
             "rec_loss": float(m.rec_loss),
             "kld": float(m.kld),
+            "kld_raw": (float(m.kld_raw) if getattr(m, "kld_raw", None) is not None else None),
+            "one_step_mse": (float(m.one_step_mse) if getattr(m, "one_step_mse", None) is not None else None),
+            "rollout_mse": (float(m.rollout_mse) if getattr(m, "rollout_mse", None) is not None else None),
+            "latent_drift": (float(m.latent_drift) if getattr(m, "latent_drift", None) is not None else None),
             "val_loss": (m.val_loss if getattr(m, "val_loss", None) is not None else None),
+            "val_one_step_mse": (float(m.val_one_step_mse) if getattr(m, "val_one_step_mse", None) is not None else None),
+            "beta": (float(m.beta) if getattr(m, "beta", None) is not None else None),
+            "rollout_horizon": (int(m.rollout_horizon) if getattr(m, "rollout_horizon", None) is not None else None),
+            "gate_threshold": (float(m.gate_threshold) if getattr(m, "gate_threshold", None) is not None else None),
         }
         for m in metrics
     ]
@@ -50,9 +58,39 @@ def save_epoch_metrics(out_dir: str, metrics: List[EpochMetrics]):
 
     # Also save CSV for convenience
     with open(os.path.join(out_dir, "metrics.csv"), "w") as f:
-        f.write("epoch,loss,rec_loss,kld,val_loss\n")
+        header = [
+            "epoch",
+            "loss",
+            "rec_loss",
+            "kld",
+            "kld_raw",
+            "one_step_mse",
+            "rollout_mse",
+            "latent_drift",
+            "val_loss",
+            "val_one_step_mse",
+            "beta",
+            "rollout_horizon",
+            "gate_threshold",
+        ]
+        f.write(",".join(header) + "\n")
         for r in rows:
-            f.write(f"{r['epoch']},{r['loss']},{r['rec_loss']},{r['kld']},{'' if r['val_loss'] is None else r['val_loss']}\n")
+            vals = [
+                r["epoch"],
+                r["loss"],
+                r["rec_loss"],
+                r["kld"],
+                "" if r["kld_raw"] is None else r["kld_raw"],
+                "" if r["one_step_mse"] is None else r["one_step_mse"],
+                "" if r["rollout_mse"] is None else r["rollout_mse"],
+                "" if r["latent_drift"] is None else r["latent_drift"],
+                "" if r["val_loss"] is None else r["val_loss"],
+                "" if r["val_one_step_mse"] is None else r["val_one_step_mse"],
+                "" if r["beta"] is None else r["beta"],
+                "" if r["rollout_horizon"] is None else r["rollout_horizon"],
+                "" if r["gate_threshold"] is None else r["gate_threshold"],
+            ]
+            f.write(",".join(str(v) for v in vals) + "\n")
 
 
 def load_metrics(out_dir: str) -> List[EpochMetrics]:
@@ -71,6 +109,14 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
                         rec_loss=float(r.get("rec_loss")),
                         kld=float(r.get("kld")),
                         val_loss=(float(r.get("val_loss")) if r.get("val_loss") is not None else None),
+                        kld_raw=(float(r.get("kld_raw")) if r.get("kld_raw") is not None else None),
+                        one_step_mse=(float(r.get("one_step_mse")) if r.get("one_step_mse") is not None else None),
+                        rollout_mse=(float(r.get("rollout_mse")) if r.get("rollout_mse") is not None else None),
+                        latent_drift=(float(r.get("latent_drift")) if r.get("latent_drift") is not None else None),
+                        val_one_step_mse=(float(r.get("val_one_step_mse")) if r.get("val_one_step_mse") is not None else None),
+                        beta=(float(r.get("beta")) if r.get("beta") is not None else None),
+                        rollout_horizon=(int(r.get("rollout_horizon")) if r.get("rollout_horizon") is not None else None),
+                        gate_threshold=(float(r.get("gate_threshold")) if r.get("gate_threshold") is not None else None),
                     )
                 )
         except Exception:
@@ -82,17 +128,50 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
     if os.path.exists(csv_path):
         try:
             with open(csv_path, "r") as f:
-                hdr = f.readline()
+                header = f.readline().strip().split(",")
                 for line in f:
                     parts = line.strip().split(",")
                     if len(parts) < 4:
                         continue
-                    epoch = int(parts[0])
-                    loss = float(parts[1])
-                    rec_loss = float(parts[2])
-                    kld = float(parts[3])
-                    val_loss = float(parts[4]) if len(parts) > 4 and parts[4] != "" else None
-                    out.append(EpochMetrics(epoch=epoch, loss=loss, rec_loss=rec_loss, kld=kld, val_loss=val_loss))
+                    row = {header[i]: parts[i] for i in range(min(len(header), len(parts)))}
+                    epoch = int(row.get("epoch"))
+                    loss = float(row.get("loss"))
+                    rec_loss = float(row.get("rec_loss"))
+                    kld = float(row.get("kld"))
+                    val_loss = float(row.get("val_loss")) if row.get("val_loss") not in (None, "", "None") else None
+                    def _to_float_optional(key: str):
+                        v = row.get(key)
+                        if v is None or v == "":
+                            return None
+                        try:
+                            return float(v)
+                        except Exception:
+                            return None
+                    def _to_int_optional(key: str):
+                        v = row.get(key)
+                        if v is None or v == "":
+                            return None
+                        try:
+                            return int(float(v))
+                        except Exception:
+                            return None
+                    out.append(
+                        EpochMetrics(
+                            epoch=epoch,
+                            loss=loss,
+                            rec_loss=rec_loss,
+                            kld=kld,
+                            val_loss=val_loss,
+                            kld_raw=_to_float_optional("kld_raw"),
+                            one_step_mse=_to_float_optional("one_step_mse"),
+                            rollout_mse=_to_float_optional("rollout_mse"),
+                            latent_drift=_to_float_optional("latent_drift"),
+                            val_one_step_mse=_to_float_optional("val_one_step_mse"),
+                            beta=_to_float_optional("beta"),
+                            rollout_horizon=_to_int_optional("rollout_horizon"),
+                            gate_threshold=_to_float_optional("gate_threshold"),
+                        )
+                    )
         except Exception:
             return []
     return out
@@ -121,7 +200,15 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
             "loss": float(m.loss),
             "rec_loss": float(m.rec_loss),
             "kld": float(m.kld),
+            "kld_raw": (float(m.kld_raw) if getattr(m, "kld_raw", None) is not None else None),
+            "one_step_mse": (float(m.one_step_mse) if getattr(m, "one_step_mse", None) is not None else None),
+            "rollout_mse": (float(m.rollout_mse) if getattr(m, "rollout_mse", None) is not None else None),
+            "latent_drift": (float(m.latent_drift) if getattr(m, "latent_drift", None) is not None else None),
             "val_loss": (m.val_loss if getattr(m, "val_loss", None) is not None else None),
+            "val_one_step_mse": (float(m.val_one_step_mse) if getattr(m, "val_one_step_mse", None) is not None else None),
+            "beta": (float(m.beta) if getattr(m, "beta", None) is not None else None),
+            "rollout_horizon": (int(m.rollout_horizon) if getattr(m, "rollout_horizon", None) is not None else None),
+            "gate_threshold": (float(m.gate_threshold) if getattr(m, "gate_threshold", None) is not None else None),
         }
         for m in metrics
     ]
@@ -130,25 +217,85 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
 
     # For CSV, prefer append when adding a new epoch so we don't clobber existing CSV on resume.
     csv_path = os.path.join(out_dir, "metrics.csv")
-    header = "epoch,loss,rec_loss,kld,val_loss\n"
+    header_cols = [
+        "epoch",
+        "loss",
+        "rec_loss",
+        "kld",
+        "kld_raw",
+        "one_step_mse",
+        "rollout_mse",
+        "latent_drift",
+        "val_loss",
+        "val_one_step_mse",
+        "beta",
+        "rollout_horizon",
+        "gate_threshold",
+    ]
+    header = ",".join(header_cols) + "\n"
     if not os.path.exists(csv_path):
         # write full CSV with header
         with open(csv_path, "w") as f:
             f.write(header)
             for r in rows:
-                f.write(f"{r['epoch']},{r['loss']},{r['rec_loss']},{r['kld']},{'' if r['val_loss'] is None else r['val_loss']}\n")
+                vals = [
+                    r["epoch"],
+                    r["loss"],
+                    r["rec_loss"],
+                    r["kld"],
+                    "" if r["kld_raw"] is None else r["kld_raw"],
+                    "" if r["one_step_mse"] is None else r["one_step_mse"],
+                    "" if r["rollout_mse"] is None else r["rollout_mse"],
+                    "" if r["latent_drift"] is None else r["latent_drift"],
+                    "" if r["val_loss"] is None else r["val_loss"],
+                    "" if r["val_one_step_mse"] is None else r["val_one_step_mse"],
+                    "" if r["beta"] is None else r["beta"],
+                    "" if r["rollout_horizon"] is None else r["rollout_horizon"],
+                    "" if r["gate_threshold"] is None else r["gate_threshold"],
+                ]
+                f.write(",".join(str(v) for v in vals) + "\n")
     else:
         # If we replaced an existing epoch, rewrite full CSV to ensure consistency.
         if replaced:
             with open(csv_path, "w") as f:
                 f.write(header)
                 for r in rows:
-                    f.write(f"{r['epoch']},{r['loss']},{r['rec_loss']},{r['kld']},{'' if r['val_loss'] is None else r['val_loss']}\n")
+                    vals = [
+                        r["epoch"],
+                        r["loss"],
+                        r["rec_loss"],
+                        r["kld"],
+                        "" if r["kld_raw"] is None else r["kld_raw"],
+                        "" if r["one_step_mse"] is None else r["one_step_mse"],
+                        "" if r["rollout_mse"] is None else r["rollout_mse"],
+                        "" if r["latent_drift"] is None else r["latent_drift"],
+                        "" if r["val_loss"] is None else r["val_loss"],
+                        "" if r["val_one_step_mse"] is None else r["val_one_step_mse"],
+                        "" if r["beta"] is None else r["beta"],
+                        "" if r["rollout_horizon"] is None else r["rollout_horizon"],
+                        "" if r["gate_threshold"] is None else r["gate_threshold"],
+                    ]
+                    f.write(",".join(str(v) for v in vals) + "\n")
         else:
             # append just the new row
             r = rows[-1]
             with open(csv_path, "a") as f:
-                f.write(f"{r['epoch']},{r['loss']},{r['rec_loss']},{r['kld']},{'' if r['val_loss'] is None else r['val_loss']}\n")
+                vals = [
+                    r["epoch"],
+                    r["loss"],
+                    r["rec_loss"],
+                    r["kld"],
+                    "" if r["kld_raw"] is None else r["kld_raw"],
+                    "" if r["one_step_mse"] is None else r["one_step_mse"],
+                    "" if r["rollout_mse"] is None else r["rollout_mse"],
+                    "" if r["latent_drift"] is None else r["latent_drift"],
+                    "" if r["val_loss"] is None else r["val_loss"],
+                    "" if r["val_one_step_mse"] is None else r["val_one_step_mse"],
+                    "" if r["beta"] is None else r["beta"],
+                    "" if r["rollout_horizon"] is None else r["rollout_horizon"],
+                    "" if r["gate_threshold"] is None else r["gate_threshold"],
+                ]
+                f.write(",".join(str(v) for v in vals) + "\n")
 
 
 def save_checkpoint(out_dir: str, ckpt: Checkpoint, metadata: Optional[Dict] = None, filename: Optional[str] = None) -> str:
@@ -283,4 +430,3 @@ def load_checkpoint(artifact_dir: str, epoch: Optional[int] = None, expected_mod
 
     ckpt = Checkpoint(epoch=data.get("epoch", -1), model_state=data.get("model_state", {}), optimizer_state=data.get("optimizer_state", {}), extras=data.get("extras", {}))
     return ckpt
-

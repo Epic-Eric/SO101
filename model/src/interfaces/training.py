@@ -10,6 +10,15 @@ class EpochMetrics:
     kld: float
     # optional validation loss for this epoch
     val_loss: Optional[float] = None
+    # additional stabilization metrics
+    one_step_mse: Optional[float] = None
+    rollout_mse: Optional[float] = None
+    latent_drift: Optional[float] = None
+    kld_raw: Optional[float] = None
+    beta: Optional[float] = None
+    val_one_step_mse: Optional[float] = None
+    rollout_horizon: Optional[int] = None
+    gate_threshold: Optional[float] = None
 
 
 @dataclass
