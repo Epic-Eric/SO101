@@ -125,7 +125,8 @@ class WorldModel(nn.Module):
         kls_raw = []
         one_step_errors = []
         latent_diffs = []
-        states_for_rollout = [state]
+        state_for_rollout = self._make_state(state.h.detach(), mu[:, 0].detach())
+        states_for_rollout = [state_for_rollout]
         gate_tau = float(self.rssm_gate_threshold if rssm_gate_threshold is None else rssm_gate_threshold)
         roll_h = int(self.short_roll_horizon if short_roll_horizon is None else short_roll_horizon)
 
