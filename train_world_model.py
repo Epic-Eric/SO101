@@ -46,6 +46,7 @@ def main():
 
     parser.add_argument("--action_mode", type=str, default=None, choices=["delta", "pos"], help="How to convert joints into action vectors")
     parser.add_argument("--kl_beta", type=float, default=None)
+    parser.add_argument("--kl_warmup_epochs", type=int, default=None, help="Warm-up epochs for KL beta (linear 0->beta)")
     parser.add_argument("--free_nats", type=float, default=None)
     parser.add_argument(
         "--val_split",
@@ -82,6 +83,8 @@ def main():
     )
 
     parser.add_argument("--device", type=str, default="auto", help="auto|cpu|cuda|mps")
+    parser.add_argument("--rssm_gate_threshold", type=float, default=None, help="1-step latent MSE threshold for gating RSSM->encoder grads")
+    parser.add_argument("--rollout_horizon", type=int, default=None, help="Short latent rollout horizon for metrics (e.g., 3-5)")
     parser.add_argument(
         "--no_prompt",
         action="store_true",
@@ -131,7 +134,15 @@ def main():
 
     action_mode = args.action_mode if args.action_mode is not None else str(cfg.get("action_mode", "delta"))
     kl_beta = args.kl_beta if args.kl_beta is not None else float(cfg.get("kl_beta", 1.0))
+    kl_warmup_epochs = args.kl_warmup_epochs if args.kl_warmup_epochs is not None else cfg.get("kl_warmup_epochs")
+    if kl_warmup_epochs is not None:
+        kl_warmup_epochs = int(kl_warmup_epochs)
     free_nats = args.free_nats if args.free_nats is not None else float(cfg.get("free_nats", 0.0))
+    rssm_gate_threshold = (
+        args.rssm_gate_threshold if args.rssm_gate_threshold is not None else float(cfg.get("rssm_gate_threshold", 0.25))
+    )
+    # Accept both rollout_horizon and legacy short_rollout_horizon config keys.
+    rollout_horizon = args.rollout_horizon if args.rollout_horizon is not None else int(cfg.get("rollout_horizon", cfg.get("short_rollout_horizon", 3)))
     val_split = args.val_split if args.val_split is not None else float(cfg.get("val_split", 0.1))
     # Accept percent inputs like 10 meaning 10%.
     if val_split is not None and val_split > 1.0:
@@ -186,7 +197,10 @@ def main():
         image_size=image_size,
         action_mode=action_mode,
         kl_beta=kl_beta,
+        kl_warmup_epochs=kl_warmup_epochs,
         free_nats=free_nats,
+        rssm_gate_threshold=rssm_gate_threshold,
+        short_roll_horizon=rollout_horizon,
         action_mask_prob=action_mask_prob,
         val_split=val_split,
         device=device,
