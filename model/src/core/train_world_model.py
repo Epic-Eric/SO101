@@ -38,6 +38,18 @@ def _default_device(device: Union[str, torch.device]) -> torch.device:
     return torch.device(device)
 
 
+def _dataset_sample(dataset, idx: int, device: torch.device):
+    from torch.utils.data import Subset
+
+    if isinstance(dataset, Subset):
+        real_idx = dataset.indices[idx]
+        sample = dataset.dataset[real_idx]
+    else:
+        sample = dataset[idx]
+    images, actions = sample[0], sample[1]
+    return images.unsqueeze(0).to(device), actions.unsqueeze(0).to(device)
+
+
 def _has_world_model_data(path: str) -> bool:
     """Accept either flat folder with joints.jsonl or episode subfolders."""
     joints_here = os.path.isfile(os.path.join(path, "joints.jsonl"))
@@ -71,7 +83,6 @@ def _save_debug_images(
     actions = batch_actions[:1]
 
     out = model(images, actions)
-    # Recon grid: show a longer horizon by sampling skipped frames across the full sequence.
     num_cols = 8
     t_total = int(images.shape[1])
     cols = min(num_cols, t_total)
@@ -82,7 +93,6 @@ def _save_debug_images(
     recon_name = f"{filename_prefix}recon_epoch_{epoch:04d}.png"
     vutils.save_image(grid, os.path.join(artifact_dir, recon_name), nrow=cols)
 
-    # Imagine rollout conditioned on actions
     imagined = model.imagine(images[0, 0].unsqueeze(0), actions[0])  # (T,C,H,W)
     im = denormalize(imagined[idx], norm_params).clamp(0, 1)
     grid2 = torch.cat([gt, im], dim=0)
@@ -262,6 +272,15 @@ def train_world_model(
         print(f"Train/Val split: train={len(train_ds)} val={len(val_ds)} (episodes val={len(val_eps)})")
     else:
         train_loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, **loader_kwargs)
+        val_ds = None
+
+    val_fixed_images = None
+    val_fixed_actions = None
+    if val_loader is not None:
+        try:
+            val_fixed_images, val_fixed_actions = _dataset_sample(val_loader.dataset, 0, dev)
+        except Exception:
+            val_fixed_images, val_fixed_actions = None, None
 
     warmup_epochs = int(kl_warmup_epochs) if kl_warmup_epochs is not None else max(1, int(epochs * DEFAULT_KL_WARMUP_FRAC))
     warmup_epochs = max(1, min(warmup_epochs, epochs))
@@ -445,6 +464,23 @@ def train_world_model(
                     v_batches += 1
             val_loss = v_loss / max(1, v_batches)
             val_one_step = v_one_step / max(1, v_batches) if v_batches > 0 else None
+            # Save validation recon/imagine: one fixed and a few random trajectories each epoch
+            try:
+                if val_fixed_images is not None and val_fixed_actions is not None:
+                    _save_debug_images(
+                        artifact_dir, epoch, world, val_fixed_images, val_fixed_actions, dataset.norm_params, filename_prefix="val_fixed_"
+                    )
+                if len(val_loader.dataset) > 0:
+                    num_rand = min(3, len(val_loader.dataset))
+                    gen = torch.Generator(device="cpu").manual_seed(epoch + 1234)
+                    rand_indices = torch.randperm(len(val_loader.dataset), generator=gen)[:num_rand]
+                    for i, idx in enumerate(rand_indices):
+                        r_images, r_actions = _dataset_sample(val_loader.dataset, int(idx), dev)
+                        _save_debug_images(
+                            artifact_dir, epoch, world, r_images, r_actions, dataset.norm_params, filename_prefix=f"val_rand{i}_"
+                        )
+            except Exception as e:
+                print(f"Could not save validation debug images: {e}")
 
         metric = EpochMetrics(
             epoch=epoch,

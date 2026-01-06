@@ -137,22 +137,32 @@ class WorldModel(nn.Module):
         for i in range(1, t):
             prev_mean = mu[:, i - 1]
 
-            with torch.no_grad():
-                gate_x = self.rssm.inp(torch.cat([prev_mean.detach(), actions[:, i - 1]], dim=-1))
-                gate_h = self.rssm.gru(gate_x, state.h.detach())
-                gate_prior_mu, gate_prior_logvar = self.rssm.prior_params(gate_h)
-                one_step_err = F.mse_loss(gate_prior_mu, mu[:, i], reduction="none").mean(dim=-1)
-            gate_mask = one_step_err > gate_tau
-            z_for_dynamics = torch.where(gate_mask.unsqueeze(-1), prev_mean.detach(), prev_mean)
+            # Provisional prediction without gating to compute gate mask
+            gate_x = self.rssm.inp(torch.cat([prev_mean, actions[:, i - 1]], dim=-1))
+            gate_h = self.rssm.gru(gate_x, state.h)
+            gate_prior_mu, gate_prior_logvar = self.rssm.prior_params(gate_h)
+            gate_one_step_err = F.mse_loss(gate_prior_mu, mu[:, i], reduction="none").mean(dim=-1)
+            gate_mask = gate_one_step_err > gate_tau
 
+            # Apply gating by stopping encoder gradients when gate_mask is True
+            z_for_dynamics = prev_mean + (prev_mean.detach() - prev_mean) * gate_mask.unsqueeze(-1)
             x = self.rssm.inp(torch.cat([z_for_dynamics, actions[:, i - 1]], dim=-1))
             h_next = self.rssm.gru(x, state.h)
             prior_mu, prior_logvar = self.rssm.prior_params(h_next)
+            one_step_err = F.mse_loss(prior_mu, mu[:, i], reduction="none").mean(dim=-1)
+            gate_mask_final = one_step_err > gate_tau
+            if not torch.equal(gate_mask_final, gate_mask):
+                gate_mask = gate_mask_final
+                z_for_dynamics = prev_mean + (prev_mean.detach() - prev_mean) * gate_mask.unsqueeze(-1)
+                x = self.rssm.inp(torch.cat([z_for_dynamics, actions[:, i - 1]], dim=-1))
+                h_next = self.rssm.gru(x, state.h)
+                prior_mu, prior_logvar = self.rssm.prior_params(h_next)
+                one_step_err = F.mse_loss(prior_mu, mu[:, i], reduction="none").mean(dim=-1)
 
             post_mu, post_logvar = mu[:, i], logvar[:, i]
             kl_i = self.rssm.kl(post_mu, post_logvar, prior_mu, prior_logvar)
             kls.append(kl_i)
-            kls_raw.append(kl_i.detach())
+            kls_raw.append(self.rssm.kl(post_mu, post_logvar, prior_mu.detach(), prior_logvar.detach()))
 
             # advance state deterministically; stochastic sample used for next step input only
             state = self._make_state(h_next, post_mu)
@@ -162,12 +172,8 @@ class WorldModel(nn.Module):
 
         kls_tensor = torch.stack(kls, dim=1)
         kld_raw = kls_tensor.mean()
-        kld = kld_raw  # average over time & batch
-        if self.free_nats > 0:
-            # free nats is applied per-step per-sample, then averaged
-            kls_t = kls_tensor  # (B,T)
-            kls_t = torch.clamp(kls_t, min=self.free_nats)
-            kld = kls_t.mean()
+        kls_clamped = torch.clamp(kls_tensor, min=self.free_nats) if self.free_nats > 0 else kls_tensor
+        kld = kls_clamped.mean()
 
         beta = torch.tensor(self.kl_beta if kl_beta_override is None else kl_beta_override, device=images.device)
         loss = rec_loss + beta * kld
