@@ -287,7 +287,7 @@ def train_world_model(
         f"KL beta schedule: 0 -> {kl_beta} over {warmup_epochs} epochs | "
         f"RSSM gate τ={rssm_gate_threshold} | rollout_horizon={short_roll_horizon}"
     )
-    print("Checkpointing/early-stopping keyed to train 1-step latent MSE; validation total loss is not used.")
+    print("Best checkpoint selection is keyed to train 1-step latent MSE; validation total loss is not used for checkpointing or early stopping.")
 
     optimizer = torch.optim.Adam(world.parameters(), lr=lr)
     use_amp = bool(amp) and dev.type == "cuda"
