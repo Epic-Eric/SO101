@@ -81,6 +81,17 @@ def main():
         choices=["float16", "float32"],
         help="Storage dtype for preloaded frames (default: float16)",
     )
+    parser.add_argument(
+        "--no_parallel_loading",
+        action="store_true",
+        help="Disable parallel episode loading during dataset initialization",
+    )
+    parser.add_argument(
+        "--loading_workers",
+        type=int,
+        default=None,
+        help="Number of worker threads for parallel episode/image loading (default: 4)",
+    )
 
     parser.add_argument("--device", type=str, default="auto", help="auto|cpu|cuda|mps")
     parser.add_argument("--rssm_gate_threshold", type=float, default=None, help="1-step latent MSE threshold for gating RSSM->encoder grads")
@@ -162,6 +173,8 @@ def main():
     preload_images = bool(args.preload_images)
     preload_dtype = args.preload_dtype if args.preload_dtype is not None else str(cfg.get("world_preload_dtype", "float16"))
     action_mask_prob = args.action_mask_prob if args.action_mask_prob is not None else float(cfg.get("world_action_mask_prob", 0.1))
+    parallel_loading = not bool(args.no_parallel_loading)
+    loading_workers = args.loading_workers if args.loading_workers is not None else int(cfg.get("world_loading_workers", 4))
 
     if preload_images and num_workers != 0:
         print("Note: --preload_images duplicates memory across DataLoader workers; consider --num_workers 0")
@@ -215,6 +228,8 @@ def main():
         amp=amp,
         reset_optimizer=bool(args.reset_optimizer),
         run_context=run_context,
+        parallel_loading=parallel_loading,
+        loading_workers=loading_workers,
     )
 
     print(f"Training complete. Final model saved to {final_model_path}")

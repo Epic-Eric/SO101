@@ -21,6 +21,7 @@ SO101 aims to provide a practical, reproducible pipeline for sim-to-real robot l
 - **Flexible Configuration**: YAML-based configuration for easy experimentation
 - **Multi-Device Support**: Automatic device selection (CPU, CUDA, MPS)
 - **World Model Workflow**: Collect synchronized images + joints, train an RSSM world model, and visualize rollouts
+- **Optimized Data Loading**: Parallel episode loading and image preprocessing for faster training
 
 ## 📋 Repository Structure
 
@@ -157,6 +158,26 @@ Arguments fall back to `config.yml`:
 - `data_dir` uses `world_data_dir` from config.yml, falling back to the general `data_dir` if `world_data_dir` is not configured.
 - `out_dir` uses `world_out_dir`; if `world_out_dir` is not configured, it uses the general `out_dir` value from config.yml.
 - Hyperparameters honor `world_*` overrides such as `world_epochs`, `world_batch_size`, `world_lr`, and `world_latent_dim`.
+
+**Performance Optimization Options:**
+
+For faster data loading, use parallel loading options:
+
+```bash
+# Local SSD storage (best performance)
+python train_world_model.py data_dir output_dir \
+    --num_workers 4 \
+    --loading_workers 8 \
+    --cache_images
+
+# Network/Cloud storage (e.g., Google Drive)
+python train_world_model.py data_dir output_dir \
+    --num_workers 0 \
+    --loading_workers 2 \
+    --preload_images
+```
+
+See [Data Loading Optimization Guide](docs/DATA_LOADING_OPTIMIZATION.md) for detailed tuning instructions.
 
 **3) Visualize rollouts / reconstructions**
 
