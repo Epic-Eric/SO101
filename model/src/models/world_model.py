@@ -192,9 +192,9 @@ class WorldModel(nn.Module):
 
         # short-horizon rollout error in latent space
         rollout_errors = []
-        if roll_h > 0:
+        if rollout_horizon > 0:
             # t >= 2 is enforced above; horizon is capped accordingly
-            horizon = min(roll_h, max(1, t - 1))
+            horizon = min(rollout_horizon, max(1, t - 1))
             with torch.no_grad():
                 # horizon is capped at (t-1), so t - horizon is at least 1 when t >= 2
                 for start in range(0, t - horizon):
