@@ -274,7 +274,6 @@ class WorldModel(nn.Module):
             sample_indices = torch.randperm(b, device=images.device)[:num_samples]
             
             contrastive_losses = []
-            action_sensitivities = []
             action_variances = []
             
             for idx in sample_indices:

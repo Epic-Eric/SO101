@@ -138,21 +138,12 @@ def compute_action_sensitivity_norm(
     # Use mu (mean) as the output to differentiate
     grads = []
     for i in range(mu.shape[0]):
-        if mu.shape[0] == 1:
-            # Single batch element
-            grad = torch.autograd.grad(
-                outputs=mu[i].sum(),
-                inputs=action,
-                create_graph=False,
-                retain_graph=(i < mu.shape[0] - 1),
-            )[0][i]
-        else:
-            grad = torch.autograd.grad(
-                outputs=mu[i].sum(),
-                inputs=action,
-                create_graph=False,
-                retain_graph=(i < mu.shape[0] - 1),
-            )[0][i]
+        grad = torch.autograd.grad(
+            outputs=mu[i].sum(),
+            inputs=action,
+            create_graph=False,
+            retain_graph=(i < mu.shape[0] - 1),
+        )[0][i]
         grads.append(grad)
     
     grads = torch.stack(grads, dim=0)
