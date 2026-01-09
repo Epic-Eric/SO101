@@ -19,6 +19,10 @@ class EpochMetrics:
     val_one_step_mse: Optional[float] = None
     rollout_horizon: Optional[int] = None
     gate_threshold: Optional[float] = None
+    # action conditioning metrics
+    contrastive_loss: Optional[float] = None
+    action_sensitivity: Optional[float] = None
+    latent_action_variance: Optional[float] = None
 
 
 @dataclass

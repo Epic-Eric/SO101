@@ -41,6 +41,7 @@ class RSSM(nn.Module):
         obs_embed_dim: int = 512,
         hidden_dim: int = 256,
         min_std: float = 0.1,
+        action_embed_dim: int = None,
     ):
         super().__init__()
         self.action_dim = int(action_dim)
@@ -49,9 +50,11 @@ class RSSM(nn.Module):
         self.obs_embed_dim = int(obs_embed_dim)
         self.hidden_dim = int(hidden_dim)
         self.min_std = float(min_std)
+        # If action_embed_dim is provided, expect action embeddings; otherwise use raw actions
+        self.action_embed_dim = int(action_embed_dim) if action_embed_dim is not None else self.action_dim
 
         self.inp = nn.Sequential(
-            nn.Linear(self.stoch_dim + self.action_dim, self.hidden_dim),
+            nn.Linear(self.stoch_dim + self.action_embed_dim, self.hidden_dim),
             nn.SiLU(),
             nn.Linear(self.hidden_dim, self.hidden_dim),
             nn.SiLU(),
