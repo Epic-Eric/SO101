@@ -131,6 +131,8 @@ def train_world_model(
     amp: bool = True,
     reset_optimizer: bool = False,
     run_context: Optional[TrainingRunContext] = None,
+    parallel_loading: bool = True,
+    loading_workers: int = 4,
 ):
     """Train the VAE+RSSM world model with KL warmup, RSSM gating, and expanded metrics.
 
@@ -139,6 +141,10 @@ def train_world_model(
     - Tracks latent-space diagnostics (1-step MSE, short-horizon rollout error, drift, raw KL).
     Best checkpoint selection is keyed to training 1-step latent MSE, not validation loss,
     to better reflect RSSM accuracy in latent space.
+    
+    Args:
+        parallel_loading: Enable parallel episode loading for faster dataset initialization
+        loading_workers: Number of worker threads for parallel episode/image loading
     """
     dev = _default_device(device)
 
@@ -226,6 +232,8 @@ def train_world_model(
         cache_size=cache_size,
         preload_images=preload_images,
         preload_dtype=preload_dtype,
+        parallel_loading=parallel_loading,
+        loading_workers=loading_workers,
     )
     print(f"Dataset ready in {time.time() - t0:.1f}s")
 

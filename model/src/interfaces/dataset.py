@@ -1,6 +1,7 @@
 import os
 import json
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict
 
@@ -24,8 +25,14 @@ class NormalizationParams:
     std: Tuple[float, float, float] = (0.5, 0.5, 0.5)
 
 
-def _discover_episode_dirs(root: str) -> List[str]:
-    """Return list of episode dirs containing joints.jsonl (root itself or nested)."""
+def _discover_episode_dirs(root: str, parallel: bool = True, max_workers: int = 4) -> List[str]:
+    """Return list of episode dirs containing joints.jsonl (root itself or nested).
+    
+    Args:
+        root: Root directory to search
+        parallel: Whether to use parallel directory scanning (faster for many episodes)
+        max_workers: Maximum number of threads for parallel scanning
+    """
     if os.path.isfile(os.path.join(root, "joints.jsonl")):
         return [root]
 
@@ -33,12 +40,34 @@ def _discover_episode_dirs(root: str) -> List[str]:
     # recursive os.walk which is very slow on networked filesystems (e.g., Colab Drive).
     try:
         immediate: List[str] = []
+        subdirs = []
         for name in sorted(os.listdir(root)):
             ep_dir = os.path.join(root, name)
-            if os.path.isdir(ep_dir) and os.path.isfile(os.path.join(ep_dir, "joints.jsonl")):
-                immediate.append(ep_dir)
+            if os.path.isdir(ep_dir):
+                subdirs.append((name, ep_dir))
+        
+        if parallel and len(subdirs) > 3:
+            # Use parallel checking for many directories
+            def check_episode_dir(item):
+                name, ep_dir = item
+                if os.path.isfile(os.path.join(ep_dir, "joints.jsonl")):
+                    return ep_dir
+                return None
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(check_episode_dir, item) for item in subdirs]
+                for future in futures:
+                    result = future.result()
+                    if result is not None:
+                        immediate.append(result)
+        else:
+            # Sequential checking for few directories
+            for name, ep_dir in subdirs:
+                if os.path.isfile(os.path.join(ep_dir, "joints.jsonl")):
+                    immediate.append(ep_dir)
+        
         if immediate:
-            return immediate
+            return sorted(immediate)
     except FileNotFoundError:
         return []
     except Exception:
@@ -111,6 +140,8 @@ class ImageJointSequenceDataset(Dataset):
         cache_size: int = 2048,
         preload_images: bool = False,
         preload_dtype: str = "float16",
+        parallel_loading: bool = True,
+        loading_workers: int = 4,
     ):
         if seq_len < 2:
             raise ValueError("seq_len must be >= 2")
@@ -276,7 +307,7 @@ class ImageJointSequenceDataset(Dataset):
                 "action_source": action_source,
             }
 
-        episode_dirs = _discover_episode_dirs(root_dir)
+        episode_dirs = _discover_episode_dirs(root_dir, parallel=parallel_loading, max_workers=loading_workers)
         if not episode_dirs:
             raise FileNotFoundError(f"joints.jsonl not found in {root_dir} or any immediate subdirectory")
 
@@ -293,12 +324,43 @@ class ImageJointSequenceDataset(Dataset):
         if self._preload_images:
             self._preloaded = []
 
-        ep_iter = episode_dirs
-        if tqdm is not None:
-            ep_iter = tqdm(episode_dirs, desc="Loading episodes", unit="ep")
+        # Parallel episode loading for better performance
+        if parallel_loading and len(episode_dirs) > 2:
+            print(f"Loading {len(episode_dirs)} episodes in parallel with {loading_workers} workers...")
+            episodes_dict = {}
+            with ThreadPoolExecutor(max_workers=loading_workers) as executor:
+                future_to_ep = {executor.submit(_load_episode, ep_dir): ep_dir for ep_dir in episode_dirs}
+                
+                ep_iter = as_completed(future_to_ep)
+                if tqdm is not None:
+                    ep_iter = tqdm(ep_iter, total=len(episode_dirs), desc="Loading episodes", unit="ep")
+                
+                for future in ep_iter:
+                    ep_dir = future_to_ep[future]
+                    try:
+                        ep = future.result()
+                        if ep is not None:
+                            episodes_dict[ep_dir] = ep
+                    except Exception as exc:
+                        print(f"Episode {ep_dir} generated an exception: {exc}")
+            
+            # Sort episodes by directory name to ensure consistent ordering
+            episode_dirs_sorted = sorted(episodes_dict.keys())
+            loaded_episodes = [episodes_dict[ep_dir] for ep_dir in episode_dirs_sorted]
+        else:
+            # Sequential loading for few episodes or when parallel is disabled
+            loaded_episodes = []
+            ep_iter = episode_dirs
+            if tqdm is not None:
+                ep_iter = tqdm(episode_dirs, desc="Loading episodes", unit="ep")
+            
+            for ep_dir in ep_iter:
+                ep = _load_episode(ep_dir)
+                if ep is not None:
+                    loaded_episodes.append(ep)
 
-        for ep_dir in ep_iter:
-            ep = _load_episode(ep_dir)
+        # Process loaded episodes
+        for ep in loaded_episodes:
             if ep is None:
                 continue
             if self.action_dim == 0:
@@ -324,11 +386,23 @@ class ImageJointSequenceDataset(Dataset):
                 action_sumsq += (ep["actions"] ** 2).sum(dim=0)
 
             if self._preloaded is not None:
-                imgs_all: List[torch.Tensor] = []
-                for p in ep["image_paths"]:
-                    img = Image.open(p).convert("RGB")
-                    imgs_all.append(self.transform(img).to(dtype=dtype))
-                self._preloaded.append(torch.stack(imgs_all, dim=0))
+                # Parallel image loading and preprocessing for better performance
+                if parallel_loading and len(ep["image_paths"]) > 10:
+                    def load_and_transform(img_path):
+                        img = Image.open(img_path).convert("RGB")
+                        return self.transform(img).to(dtype=dtype)
+                    
+                    imgs_all: List[torch.Tensor] = []
+                    with ThreadPoolExecutor(max_workers=min(loading_workers, 8)) as executor:
+                        imgs_all = list(executor.map(load_and_transform, ep["image_paths"]))
+                    self._preloaded.append(torch.stack(imgs_all, dim=0))
+                else:
+                    # Sequential loading for small episodes
+                    imgs_all: List[torch.Tensor] = []
+                    for p in ep["image_paths"]:
+                        img = Image.open(p).convert("RGB")
+                        imgs_all.append(self.transform(img).to(dtype=dtype))
+                    self._preloaded.append(torch.stack(imgs_all, dim=0))
 
         if not self._episodes:
             raise ValueError(f"No valid episodes with at least seq_len={self.seq_len} found in {root_dir}")
