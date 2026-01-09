@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass
 from typing import Optional
 
@@ -282,7 +283,6 @@ class WorldModel(nn.Module):
             for idx in sample_indices:
                 # Pick a random time step (use Python random for efficiency)
                 if t > 2:
-                    import random
                     time_idx = random.randint(0, t - 2)
                 else:
                     time_idx = 0

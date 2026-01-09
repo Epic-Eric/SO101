@@ -115,7 +115,6 @@ def compute_action_sensitivity_norm(
     model,
     state,
     action: torch.Tensor,
-    epsilon: float = 1e-3,
 ) -> torch.Tensor:
     """Compute action sensitivity as gradient norm ||∂z_{t+1} / ∂a_t||.
     
@@ -123,7 +122,6 @@ def compute_action_sensitivity_norm(
         model: RSSM model with step() method
         state: Current RSSMState
         action: Action tensor (B, action_dim), requires_grad=True
-        epsilon: Small value for numerical stability
         
     Returns:
         Sensitivity norm (B,)
