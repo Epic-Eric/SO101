@@ -98,7 +98,8 @@ def main():
     parser.add_argument("--rollout_horizon", type=int, default=None, help="Short latent rollout horizon for metrics (e.g., 3-5)")
     
     # Action conditioning parameters
-    parser.add_argument("--no_action_encoder", action="store_true", help="Disable action encoder (use raw actions)")
+    parser.add_argument("--use_action_encoder", action="store_true", default=True, help="Use action encoder (enabled by default)")
+    parser.add_argument("--no_action_encoder", action="store_true", help="Disable action encoder")
     parser.add_argument("--action_embed_dim", type=int, default=None, help="Action embedding dimension")
     parser.add_argument("--contrastive_weight", type=float, default=None, help="Weight for contrastive action loss")
     parser.add_argument("--contrastive_margin", type=float, default=None, help="Margin for contrastive loss")
@@ -185,7 +186,9 @@ def main():
     loading_workers = args.loading_workers if args.loading_workers is not None else int(cfg.get("world_loading_workers", 4))
     
     # Action conditioning parameters
-    use_action_encoder = not bool(args.no_action_encoder)
+    use_action_encoder = args.use_action_encoder if not args.no_action_encoder else False
+    if args.no_action_encoder:
+        use_action_encoder = False
     action_embed_dim = args.action_embed_dim if args.action_embed_dim is not None else cfg.get("action_embed_dim")
     if action_embed_dim is not None:
         action_embed_dim = int(action_embed_dim)

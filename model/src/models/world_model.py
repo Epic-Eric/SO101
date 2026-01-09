@@ -147,7 +147,9 @@ class WorldModel(nn.Module):
         flat = images.reshape(b * t, c, h, w)
         
         # Scheduled gradient detachment between VAE encoder and RSSM
-        # Increment step counter in training mode
+        # Note: Step counter is incremented during forward pass. This is safe because
+        # PyTorch training loops are single-threaded per model instance.
+        # For distributed training, each replica has its own model instance.
         if self.training:
             self._step_counter += 1
         allow_vae_grad = (self._step_counter % self.grad_detach_schedule_k == 0) if self.training else True
@@ -269,17 +271,19 @@ class WorldModel(nn.Module):
         
         if self.training and t > 1 and b > 1:
             # Sample random time steps and batch indices for contrastive pairs
-            # For each state, predict next state with two different actions
-            num_samples = min(b, 4)  # Limit samples for efficiency
+            # Limit to 4 samples per batch for computational efficiency
+            # (reduces overhead while maintaining sufficient contrastive signal)
+            num_samples = min(b, 4)
             sample_indices = torch.randperm(b, device=images.device)[:num_samples]
             
             contrastive_losses = []
             action_variances = []
             
             for idx in sample_indices:
-                # Pick a random time step
+                # Pick a random time step (use Python random for efficiency)
                 if t > 2:
-                    time_idx = torch.randint(0, t - 1, (1,), device=images.device).item()
+                    import random
+                    time_idx = random.randint(0, t - 2)
                 else:
                     time_idx = 0
                 
@@ -290,8 +294,10 @@ class WorldModel(nn.Module):
                 
                 # Two different actions from the batch
                 action_a = action_input[idx:idx+1, time_idx]
-                # Pick a different action from another batch element
-                other_idx = (idx + 1) % b
+                # Pick a different random action from another batch element
+                other_idx = torch.randint(0, b, (1,), device=images.device).item()
+                while other_idx == idx and b > 1:
+                    other_idx = torch.randint(0, b, (1,), device=images.device).item()
                 action_b = action_input[other_idx:other_idx+1, time_idx]
                 
                 # Predict next states with different actions
