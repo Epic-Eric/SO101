@@ -133,6 +133,12 @@ def train_world_model(
     run_context: Optional[TrainingRunContext] = None,
     parallel_loading: bool = True,
     loading_workers: int = 4,
+    # New action conditioning parameters
+    use_action_encoder: bool = True,
+    action_embed_dim: Optional[int] = None,
+    contrastive_weight: float = 0.1,
+    contrastive_margin: float = 1.0,
+    grad_detach_schedule: int = 4,
 ):
     """Train the VAE+RSSM world model with KL warmup, RSSM gating, and expanded metrics.
 
@@ -309,6 +315,11 @@ def train_world_model(
         free_nats=free_nats,
         rssm_gate_threshold=rssm_gate_threshold,
         short_roll_horizon=short_roll_horizon,
+        use_action_encoder=use_action_encoder,
+        action_embed_dim=action_embed_dim,
+        contrastive_weight=contrastive_weight,
+        contrastive_margin=contrastive_margin,
+        grad_detach_schedule_k=grad_detach_schedule,
     ).to(dev)
     print(
         f"KL beta schedule: 0 -> {kl_beta} over {warmup_epochs} epochs | "
@@ -369,6 +380,9 @@ def train_world_model(
         running_one_step = 0.0
         running_rollout = 0.0
         running_drift = 0.0
+        running_contrastive = 0.0
+        running_action_sensitivity = 0.0
+        running_action_variance = 0.0
         n_batches = 0
 
         # Keep one batch for debug images (varies per-epoch due to shuffle).
@@ -423,6 +437,9 @@ def train_world_model(
             running_one_step += float(out.one_step_mse.detach().cpu())
             running_rollout += float(out.rollout_mse.detach().cpu())
             running_drift += float(out.latent_drift.detach().cpu())
+            running_contrastive += float(out.contrastive_loss.detach().cpu())
+            running_action_sensitivity += float(out.action_sensitivity.detach().cpu())
+            running_action_variance += float(out.latent_action_variance.detach().cpu())
             n_batches += 1
 
             if log_every and (step_idx % max(1, int(log_every)) == 0 or step_idx == 1):
@@ -432,6 +449,7 @@ def train_world_model(
                         "rec": f"{(running_rec / n_batches):.3f}",
                         "kld": f"{(running_kld / n_batches):.3f}",
                         "1step": f"{(running_one_step / n_batches):.3f}",
+                        "contr": f"{(running_contrastive / n_batches):.3f}",
                     }
                 )
 
@@ -442,6 +460,9 @@ def train_world_model(
         epoch_one_step = running_one_step / max(1, n_batches)
         epoch_rollout = running_rollout / max(1, n_batches)
         epoch_drift = running_drift / max(1, n_batches)
+        epoch_contrastive = running_contrastive / max(1, n_batches)
+        epoch_action_sensitivity = running_action_sensitivity / max(1, n_batches)
+        epoch_action_variance = running_action_variance / max(1, n_batches)
 
         # Validation
         val_loss = None
@@ -504,6 +525,9 @@ def train_world_model(
             beta=beta_now,
             rollout_horizon=short_roll_horizon,
             gate_threshold=rssm_gate_threshold,
+            contrastive_loss=epoch_contrastive,
+            action_sensitivity=epoch_action_sensitivity,
+            latent_action_variance=epoch_action_variance,
         )
         all_metrics.append(metric)
         append_epoch_metric(artifact_dir, metric)
