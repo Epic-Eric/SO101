@@ -65,24 +65,26 @@ class WorldModel(nn.Module):
         kl_beta: float = 1.0,
         free_nats: float = 0.0,
         min_std: float = 0.1,
-        rssm_gate_threshold: float = 0.25,
+        rssm_gate_threshold: float = 0.25,  # DEPRECATED: Kept for backward compatibility only
         short_roll_horizon: int = 3,
         # New parameters for action conditioning
         use_action_encoder: bool = True,
         action_embed_dim: int = None,
         contrastive_weight: float = 0.1,
         contrastive_margin: float = 1.0,
-        grad_detach_schedule_k: int = 4,
+        grad_detach_schedule_k: int = 4,  # DEPRECATED: Kept for backward compatibility only
     ):
         super().__init__()
         self.kl_beta = float(kl_beta)
         self.free_nats = float(free_nats)
-        self.rssm_gate_threshold = float(rssm_gate_threshold)  # Kept for backward compatibility, not used in current implementation
+        # DEPRECATED: These parameters are no longer used in the new gradient-isolated architecture
+        # but are kept for backward compatibility with existing training scripts and configs
+        self.rssm_gate_threshold = float(rssm_gate_threshold)
+        self.grad_detach_schedule_k = int(grad_detach_schedule_k)
+        
         self.short_roll_horizon = int(short_roll_horizon)
         self.use_action_encoder = bool(use_action_encoder)
         self.contrastive_weight = float(contrastive_weight)
-        # grad_detach_schedule_k kept for backward compatibility, not used in current implementation
-        self.grad_detach_schedule_k = int(grad_detach_schedule_k)
 
         self.vae = VAEStrong(
             in_channels=3,
@@ -239,8 +241,11 @@ class WorldModel(nn.Module):
         # ================================================================
         loss = vae_loss + rssm_loss
         
-        # For backward compatibility, also compute the old "kld" metric
-        # This represents the VAE KL only (for t=0)
+        # For backward compatibility with existing metrics tracking:
+        # - kld represents the VAE KL divergence (at t=0 only in new architecture)
+        # - kld_raw is kept equal to kld for compatibility with existing plotting/analysis code
+        # Note: In the old architecture, these tracked the RSSM KL across all timesteps.
+        # In the new architecture, RSSM consistency is tracked separately via rssm_loss.
         kld = vae_kl
         kld_raw = vae_kl
 

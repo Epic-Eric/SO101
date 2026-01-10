@@ -91,10 +91,10 @@ def test_manual_gradient_computation():
     mu = mu_flat.reshape(b, t, -1)
     logvar = logvar_flat.reshape(b, t, -1)
     
-    # VAE loss components
+    # VAE loss components - compute KL directly
+    # KL(q||N(0,1)) = 0.5 * (mu^2 + var - 1 - logvar)
+    vae_kl = (0.5 * (mu[:, 0].pow(2) + torch.exp(logvar[:, 0]) - 1.0 - logvar[:, 0]).sum(dim=-1)).mean()
     rec_loss = model.vae.reconstruction_loss(flat, x_rec_flat)
-    from model.src.models.world_model import _standard_normal_kl
-    vae_kl = _standard_normal_kl(mu[:, 0], logvar[:, 0]).mean()
     vae_loss = rec_loss + vae_kl
     
     # Test VAE loss gradients
