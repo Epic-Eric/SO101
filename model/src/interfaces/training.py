@@ -11,6 +11,7 @@ class EpochMetrics:
     # optional validation loss for this epoch
     val_loss: Optional[float] = None
     # additional stabilization metrics
+    rssm_loss: Optional[float] = None  # New: RSSM consistency loss
     one_step_mse: Optional[float] = None
     rollout_mse: Optional[float] = None
     latent_drift: Optional[float] = None
