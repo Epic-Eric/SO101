@@ -77,12 +77,12 @@ class WorldModel(nn.Module):
         super().__init__()
         self.kl_beta = float(kl_beta)
         self.free_nats = float(free_nats)
-        self.rssm_gate_threshold = float(rssm_gate_threshold)
+        self.rssm_gate_threshold = float(rssm_gate_threshold)  # Kept for backward compatibility, not used in current implementation
         self.short_roll_horizon = int(short_roll_horizon)
         self.use_action_encoder = bool(use_action_encoder)
         self.contrastive_weight = float(contrastive_weight)
+        # grad_detach_schedule_k kept for backward compatibility, not used in current implementation
         self.grad_detach_schedule_k = int(grad_detach_schedule_k)
-        self._step_counter = 0  # Track training steps for gradient detachment
 
         self.vae = VAEStrong(
             in_channels=3,
@@ -197,7 +197,6 @@ class WorldModel(nn.Module):
         one_step_errors = []
         latent_diffs = []
         states_for_rollout = [self._make_state(state.h.detach(), mu_detached[:, 0])]
-        gate_tau = float(self.rssm_gate_threshold if rssm_gate_threshold is None else rssm_gate_threshold)
         rollout_horizon = int(self.short_roll_horizon if short_roll_horizon is None else short_roll_horizon)
 
         # Compute RSSM consistency loss for t=1..T-1
