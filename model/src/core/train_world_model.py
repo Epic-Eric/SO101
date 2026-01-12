@@ -377,6 +377,7 @@ def train_world_model(
         running_rec = 0.0
         running_kld = 0.0
         running_kld_raw = 0.0
+        running_rssm = 0.0  # New: RSSM consistency loss
         running_one_step = 0.0
         running_rollout = 0.0
         running_drift = 0.0
@@ -434,6 +435,7 @@ def train_world_model(
             running_rec += float(out.rec_loss.detach().cpu())
             running_kld += float(out.kld.detach().cpu())
             running_kld_raw += float(out.kld_raw.detach().cpu())
+            running_rssm += float(out.rssm_loss.detach().cpu())  # New: RSSM consistency loss
             running_one_step += float(out.one_step_mse.detach().cpu())
             running_rollout += float(out.rollout_mse.detach().cpu())
             running_drift += float(out.latent_drift.detach().cpu())
@@ -448,6 +450,7 @@ def train_world_model(
                         "loss": f"{(running_loss / n_batches):.3f}",
                         "rec": f"{(running_rec / n_batches):.3f}",
                         "kld": f"{(running_kld / n_batches):.3f}",
+                        "rssm": f"{(running_rssm / n_batches):.3f}",
                         "1step": f"{(running_one_step / n_batches):.3f}",
                         "contr": f"{(running_contrastive / n_batches):.3f}",
                     }
@@ -457,6 +460,7 @@ def train_world_model(
         epoch_rec = running_rec / max(1, n_batches)
         epoch_kld = running_kld / max(1, n_batches)
         epoch_kld_raw = running_kld_raw / max(1, n_batches)
+        epoch_rssm = running_rssm / max(1, n_batches)  # New: RSSM consistency loss
         epoch_one_step = running_one_step / max(1, n_batches)
         epoch_rollout = running_rollout / max(1, n_batches)
         epoch_drift = running_drift / max(1, n_batches)
@@ -517,6 +521,7 @@ def train_world_model(
             rec_loss=epoch_rec,
             kld=epoch_kld,
             kld_raw=epoch_kld_raw,
+            rssm_loss=epoch_rssm,  # New: RSSM consistency loss
             one_step_mse=epoch_one_step,
             rollout_mse=epoch_rollout,
             latent_drift=epoch_drift,
@@ -568,7 +573,7 @@ def train_world_model(
 
         print(
             f"Epoch {epoch}/{epochs} | beta={beta_now:.3f} "
-            f"loss={epoch_loss:.4f} rec={epoch_rec:.4f} kld={epoch_kld:.4f} kld_raw={epoch_kld_raw:.4f} "
+            f"loss={epoch_loss:.4f} rec={epoch_rec:.4f} kld={epoch_kld:.4f} kld_raw={epoch_kld_raw:.4f} rssm={epoch_rssm:.4f} "
             f"1step={epoch_one_step:.4f} roll@{short_roll_horizon}={epoch_rollout:.4f} drift={epoch_drift:.4f}"
             + (f" val_loss={val_loss:.4f}" if val_loss is not None else "")
             + (f" val_1step={val_one_step:.4f}" if val_one_step is not None else "")
