@@ -70,6 +70,9 @@ def save_epoch_metrics(out_dir: str, metrics: List[EpochMetrics]):
             "beta": (float(m.beta) if getattr(m, "beta", None) is not None else None),
             "rollout_horizon": (int(m.rollout_horizon) if getattr(m, "rollout_horizon", None) is not None else None),
             "gate_threshold": (float(m.gate_threshold) if getattr(m, "gate_threshold", None) is not None else None),
+            "contrastive_loss": (float(m.contrastive_loss) if getattr(m, "contrastive_loss", None) is not None else None),
+            "action_sensitivity": (float(m.action_sensitivity) if getattr(m, "action_sensitivity", None) is not None else None),
+            "latent_action_variance": (float(m.latent_action_variance) if getattr(m, "latent_action_variance", None) is not None else None),
         }
         for m in metrics
     ]
@@ -92,6 +95,9 @@ def save_epoch_metrics(out_dir: str, metrics: List[EpochMetrics]):
             "beta",
             "rollout_horizon",
             "gate_threshold",
+            "contrastive_loss",
+            "action_sensitivity",
+            "latent_action_variance",
         ]
         f.write(",".join(header) + "\n")
         for r in rows:
@@ -109,6 +115,9 @@ def save_epoch_metrics(out_dir: str, metrics: List[EpochMetrics]):
                 "" if r["beta"] is None else r["beta"],
                 "" if r["rollout_horizon"] is None else r["rollout_horizon"],
                 "" if r["gate_threshold"] is None else r["gate_threshold"],
+                "" if r["contrastive_loss"] is None else r["contrastive_loss"],
+                "" if r["action_sensitivity"] is None else r["action_sensitivity"],
+                "" if r["latent_action_variance"] is None else r["latent_action_variance"],
             ]
             f.write(",".join(str(v) for v in vals) + "\n")
 
@@ -137,6 +146,9 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
                         beta=_parse_optional_float(r.get("beta")),
                         rollout_horizon=_parse_optional_int(r.get("rollout_horizon")),
                         gate_threshold=_parse_optional_float(r.get("gate_threshold")),
+                        contrastive_loss=_parse_optional_float(r.get("contrastive_loss")),
+                        action_sensitivity=_parse_optional_float(r.get("action_sensitivity")),
+                        latent_action_variance=_parse_optional_float(r.get("latent_action_variance")),
                     )
                 )
         except Exception:
@@ -178,6 +190,9 @@ def load_metrics(out_dir: str) -> List[EpochMetrics]:
                             beta=_parse_optional_float(row.get("beta")),
                             rollout_horizon=_parse_optional_int(row.get("rollout_horizon")),
                             gate_threshold=_parse_optional_float(row.get("gate_threshold")),
+                            contrastive_loss=_parse_optional_float(row.get("contrastive_loss")),
+                            action_sensitivity=_parse_optional_float(row.get("action_sensitivity")),
+                            latent_action_variance=_parse_optional_float(row.get("latent_action_variance")),
                         )
                     )
         except Exception:
@@ -217,6 +232,9 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
             "beta": (float(m.beta) if getattr(m, "beta", None) is not None else None),
             "rollout_horizon": (int(m.rollout_horizon) if getattr(m, "rollout_horizon", None) is not None else None),
             "gate_threshold": (float(m.gate_threshold) if getattr(m, "gate_threshold", None) is not None else None),
+            "contrastive_loss": (float(m.contrastive_loss) if getattr(m, "contrastive_loss", None) is not None else None),
+            "action_sensitivity": (float(m.action_sensitivity) if getattr(m, "action_sensitivity", None) is not None else None),
+            "latent_action_variance": (float(m.latent_action_variance) if getattr(m, "latent_action_variance", None) is not None else None),
         }
         for m in metrics
     ]
@@ -239,6 +257,9 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
         "beta",
         "rollout_horizon",
         "gate_threshold",
+        "contrastive_loss",
+        "action_sensitivity",
+        "latent_action_variance",
     ]
     header = ",".join(header_cols) + "\n"
     if not os.path.exists(csv_path):
@@ -260,6 +281,9 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
                     "" if r["beta"] is None else r["beta"],
                     "" if r["rollout_horizon"] is None else r["rollout_horizon"],
                     "" if r["gate_threshold"] is None else r["gate_threshold"],
+                    "" if r["contrastive_loss"] is None else r["contrastive_loss"],
+                    "" if r["action_sensitivity"] is None else r["action_sensitivity"],
+                    "" if r["latent_action_variance"] is None else r["latent_action_variance"],
                 ]
                 f.write(",".join(str(v) for v in vals) + "\n")
     else:
@@ -282,10 +306,14 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
                         "" if r["beta"] is None else r["beta"],
                         "" if r["rollout_horizon"] is None else r["rollout_horizon"],
                         "" if r["gate_threshold"] is None else r["gate_threshold"],
+                        "" if r["contrastive_loss"] is None else r["contrastive_loss"],
+                        "" if r["action_sensitivity"] is None else r["action_sensitivity"],
+                        "" if r["latent_action_variance"] is None else r["latent_action_variance"],
                     ]
                     f.write(",".join(str(v) for v in vals) + "\n")
         else:
             # append just the new row
+            assert rows, "Expected at least one epoch row before appending"
             r = rows[-1]
             with open(csv_path, "a") as f:
                 vals = [
@@ -302,6 +330,9 @@ def append_epoch_metric(out_dir: str, metric: EpochMetrics):
                     "" if r["beta"] is None else r["beta"],
                     "" if r["rollout_horizon"] is None else r["rollout_horizon"],
                     "" if r["gate_threshold"] is None else r["gate_threshold"],
+                    "" if r["contrastive_loss"] is None else r["contrastive_loss"],
+                    "" if r["action_sensitivity"] is None else r["action_sensitivity"],
+                    "" if r["latent_action_variance"] is None else r["latent_action_variance"],
                 ]
                 f.write(",".join(str(v) for v in vals) + "\n")
 
@@ -405,6 +436,7 @@ def find_latest_checkpoint(artifact_dir: str) -> Optional[str]:
         except Exception:
             return -1
     files.sort(key=epoch_from_name)
+    assert files, "Expected checkpoint list to be non-empty after filtering"
     return os.path.join(artifact_dir, files[-1])
 
 

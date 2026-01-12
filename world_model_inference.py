@@ -419,7 +419,7 @@ def main():
 	parser.add_argument(
 		"--prior-temperature",
 		type=float,
-		default=1.0,
+		default=0.7,
 		help="When sampling (i.e. --stochastic), scale the RSSM prior std by this factor. Larger values can reduce fixed-point collapse in long rollouts.",
 	)
 	parser.add_argument(
@@ -442,7 +442,7 @@ def main():
 	parser.add_argument(
 		"--action-step",
 		type=float,
-		default=0.01,
+		default=3,
 		help="Per-keypress action magnitude (in units of --action-input)",
 	)
 	parser.add_argument(
