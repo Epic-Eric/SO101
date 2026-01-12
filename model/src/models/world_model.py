@@ -177,8 +177,13 @@ class WorldModel(nn.Module):
         # Reconstruction loss over all frames
         rec_loss = self.vae.reconstruction_loss(flat, x_rec_flat)
         
-        # VAE KL loss: KL(q(z_t|x_t) || N(0,I)) for t=0 only
-        # This trains the encoder to produce a reasonable initial latent distribution
+        # VAE KL loss: KL(q(z_t|x_t) || N(0, I)) applied **only** at t = 0.
+        # We intentionally regularize just the initial posterior q(z_0 | x_0) towards
+        # the standard normal prior. This makes the initial latent well-posed while
+        # allowing subsequent latents z_{t>0} to be shaped primarily by the RSSM
+        # dynamics and the reconstruction loss. The RSSM consistency loss operates
+        # on (detached) posteriors across all timesteps, so later z_t are indirectly
+        # constrained without an explicit per-timestep KL term here.
         vae_kl = _standard_normal_kl(mu[:, 0], logvar[:, 0]).mean()
         
         beta = torch.tensor(self.kl_beta if kl_beta_override is None else kl_beta_override, device=images.device)
