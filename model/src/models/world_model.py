@@ -63,7 +63,7 @@ class WorldModel(nn.Module):
         rec_loss: str = "mse",
         output_activation: str = "tanh",
         kl_beta: float = 1.0,
-        free_nats: float = 0.0,
+        free_nats: float = 0.0,  # DEPRECATED: Kept for backward compatibility only
         min_std: float = 0.1,
         rssm_gate_threshold: float = 0.25,  # DEPRECATED: Kept for backward compatibility only
         short_roll_horizon: int = 3,
