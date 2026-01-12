@@ -45,7 +45,7 @@ class WorldModel(nn.Module):
     - RSSM predicts a prior over z_t given past z and actions.
 
     Training objective consists of two separate losses:
-      L_vae = recon(x_t | z_t) + beta * KL(q(z_t|x_t) || N(0,I))
+      L_vae = recon(x_t | z_t) + beta * KL(q(z_0|x_0) || N(0,I))
       L_rssm = KL(q(z_{t+1}|x_{t+1}) || p(z_{t+1}|z_t, a_t))
     
     Gradient isolation:
