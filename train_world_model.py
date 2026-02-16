@@ -13,6 +13,23 @@ def _pick_device() -> str:
     return "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _has_world_model_data(path: str) -> bool:
+    """Accept either a flat folder with joints.jsonl or episode subfolders.
+
+    For episode roots, we accept any nested folder containing joints.jsonl.
+    """
+
+    if os.path.isfile(os.path.join(path, "joints.jsonl")):
+        return True
+    try:
+        for dirpath, _, filenames in os.walk(path):
+            if "joints.jsonl" in filenames:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Train a VAE+RSSM world model from image sequences + joints.jsonl")
     parser.add_argument("data_dir", type=str, nargs="?", help="Directory containing joints.jsonl and frames (e.g. data/captured_images_and_joints)")
@@ -29,8 +46,14 @@ def main():
 
     parser.add_argument("--action_mode", type=str, default=None, choices=["delta", "pos"], help="How to convert joints into action vectors")
     parser.add_argument("--kl_beta", type=float, default=None)
+    parser.add_argument("--kl_warmup_epochs", type=int, default=None, help="Warm-up epochs for KL beta (linear 0->beta)")
     parser.add_argument("--free_nats", type=float, default=None)
-    parser.add_argument("--val_split", type=float, default=None)
+    parser.add_argument(
+        "--val_split",
+        type=float,
+        default=None,
+        help="Validation split as fraction (e.g. 0.1) or percent (e.g. 10 for 10%)",
+    )
     parser.add_argument("--log_every", type=int, default=None, help="Update per-batch loss stats every N steps")
 
     # Performance knobs (useful for Colab / Google Drive)
@@ -40,6 +63,12 @@ def main():
     parser.add_argument("--no_amp", action="store_true", help="Disable CUDA AMP mixed precision")
     parser.add_argument("--cache_images", action="store_true", help="Cache transformed frames in RAM (speeds up slow disk)")
     parser.add_argument("--cache_size", type=int, default=None, help="Max number of frames to keep in RAM cache")
+    parser.add_argument(
+        "--action_mask_prob",
+        type=float,
+        default=None,
+        help="Probability of masking actions during training for autoregressive robustness",
+    )
     parser.add_argument(
         "--preload_images",
         action="store_true",
@@ -52,8 +81,40 @@ def main():
         choices=["float16", "float32"],
         help="Storage dtype for preloaded frames (default: float16)",
     )
+    parser.add_argument(
+        "--no_parallel_loading",
+        action="store_true",
+        help="Disable parallel episode loading during dataset initialization",
+    )
+    parser.add_argument(
+        "--loading_workers",
+        type=int,
+        default=None,
+        help="Number of worker threads for parallel episode/image loading (default: 4)",
+    )
 
     parser.add_argument("--device", type=str, default="auto", help="auto|cpu|cuda|mps")
+    parser.add_argument("--rssm_gate_threshold", type=float, default=None, help="1-step latent MSE threshold for gating RSSM->encoder grads")
+    parser.add_argument("--rollout_horizon", type=int, default=None, help="Short latent rollout horizon for metrics (e.g., 3-5)")
+    
+    # Action conditioning parameters
+    parser.add_argument("--no_action_encoder", action="store_true", help="Disable action encoder (enabled by default)")
+    parser.add_argument("--action_embed_dim", type=int, default=None, help="Action embedding dimension")
+    parser.add_argument("--contrastive_weight", type=float, default=None, help="Weight for contrastive action loss")
+    parser.add_argument("--contrastive_margin", type=float, default=None, help="Margin for contrastive loss")
+    parser.add_argument("--grad_detach_schedule", type=int, default=None, help="Gradient detachment schedule K (detach every K steps)")
+    
+    parser.add_argument(
+        "--no_prompt",
+        action="store_true",
+        help="Do not prompt for artifact resume/rewrite; always start a new run (recommended for batch jobs)",
+    )
+
+    parser.add_argument(
+        "--reset_optimizer",
+        action="store_true",
+        help="When resuming from a checkpoint, load model weights but reset optimizer state",
+    )
 
     args = parser.parse_args()
 
@@ -64,7 +125,7 @@ def main():
     cfg_data_dir = cfg.get("world_data_dir")
     if not cfg_data_dir:
         cand = cfg.get("data_dir")
-        if isinstance(cand, str) and os.path.isdir(cand) and os.path.isfile(os.path.join(cand, "joints.jsonl")):
+        if isinstance(cand, str) and os.path.isdir(cand) and _has_world_model_data(cand):
             cfg_data_dir = cand
 
     data_dir = args.data_dir or cfg_data_dir
@@ -74,8 +135,8 @@ def main():
         raise SystemExit("data_dir is required (pass arg or set world_data_dir in config.yml)")
     if not os.path.isdir(data_dir):
         raise SystemExit(f"data_dir not found: {data_dir}")
-    if not os.path.isfile(os.path.join(data_dir, "joints.jsonl")):
-        raise SystemExit(f"Expected joints.jsonl in {data_dir}")
+    if not _has_world_model_data(data_dir):
+        raise SystemExit(f"Expected joints.jsonl in {data_dir} or in at least one immediate subdirectory")
 
     if not out_dir:
         raise SystemExit("out_dir is required (pass arg or set world_out_dir/out_dir in config.yml)")
@@ -92,8 +153,23 @@ def main():
 
     action_mode = args.action_mode if args.action_mode is not None else str(cfg.get("action_mode", "delta"))
     kl_beta = args.kl_beta if args.kl_beta is not None else float(cfg.get("kl_beta", 1.0))
+    kl_warmup_epochs = args.kl_warmup_epochs if args.kl_warmup_epochs is not None else cfg.get("kl_warmup_epochs")
+    if kl_warmup_epochs is not None:
+        kl_warmup_epochs = int(kl_warmup_epochs)
     free_nats = args.free_nats if args.free_nats is not None else float(cfg.get("free_nats", 0.0))
+    rssm_gate_threshold = (
+        args.rssm_gate_threshold if args.rssm_gate_threshold is not None else float(cfg.get("rssm_gate_threshold", 0.25))
+    )
+    # Accept both rollout_horizon and legacy short_rollout_horizon config keys.
+    rollout_horizon = args.rollout_horizon if args.rollout_horizon is not None else int(cfg.get("rollout_horizon", cfg.get("short_rollout_horizon", 3)))
     val_split = args.val_split if args.val_split is not None else float(cfg.get("val_split", 0.1))
+    # Accept percent inputs like 10 meaning 10%.
+    if val_split is not None and val_split > 1.0:
+        if val_split <= 100.0:
+            print(f"Interpreting val_split={val_split} as {val_split/100.0:.3f} (percent -> fraction)")
+            val_split = float(val_split) / 100.0
+        else:
+            raise SystemExit(f"val_split must be in (0,1) as a fraction, or <=100 as a percent; got {val_split}")
     log_every = args.log_every if args.log_every is not None else int(cfg.get("world_log_every", cfg.get("log_every", 10)))
 
     num_workers = args.num_workers if args.num_workers is not None else int(cfg.get("world_num_workers", 2))
@@ -104,6 +180,18 @@ def main():
     cache_size = args.cache_size if args.cache_size is not None else int(cfg.get("world_cache_size", 2048))
     preload_images = bool(args.preload_images)
     preload_dtype = args.preload_dtype if args.preload_dtype is not None else str(cfg.get("world_preload_dtype", "float16"))
+    action_mask_prob = args.action_mask_prob if args.action_mask_prob is not None else float(cfg.get("world_action_mask_prob", 0.1))
+    parallel_loading = not bool(args.no_parallel_loading)
+    loading_workers = args.loading_workers if args.loading_workers is not None else int(cfg.get("world_loading_workers", 4))
+    
+    # Action conditioning parameters
+    use_action_encoder = not bool(args.no_action_encoder)
+    action_embed_dim = args.action_embed_dim if args.action_embed_dim is not None else cfg.get("action_embed_dim")
+    if action_embed_dim is not None:
+        action_embed_dim = int(action_embed_dim)
+    contrastive_weight = args.contrastive_weight if args.contrastive_weight is not None else float(cfg.get("contrastive_weight", 0.1))
+    contrastive_margin = args.contrastive_margin if args.contrastive_margin is not None else float(cfg.get("contrastive_margin", 1.0))
+    grad_detach_schedule = args.grad_detach_schedule if args.grad_detach_schedule is not None else int(cfg.get("grad_detach_schedule", 4))
 
     if preload_images and num_workers != 0:
         print("Note: --preload_images duplicates memory across DataLoader workers; consider --num_workers 0")
@@ -114,13 +202,17 @@ def main():
 
     print(f"Using device: {device}")
     print(f"Training world model on {data_dir}, saving to {out_dir}")
-    print(f"epochs={epochs} batch_size={batch_size} lr={lr} seq_len={seq_len} latent_dim={latent_dim} deter_dim={deter_dim} action_mode={action_mode}")
+    print(
+        f"epochs={epochs} batch_size={batch_size} lr={lr} seq_len={seq_len} latent_dim={latent_dim} "
+        f"deter_dim={deter_dim} action_mode={action_mode} action_mask_prob={action_mask_prob}"
+    )
 
+    prompt_user = not args.no_prompt
     run_context = prepare_run_context(
         out_dir=out_dir,
         run_name="world_model",
         load_checkpoint_fn=load_checkpoint,
-        prompt_user=True,
+        prompt_user=prompt_user,
     )
 
     final_model_path = train_world_model(
@@ -135,7 +227,11 @@ def main():
         image_size=image_size,
         action_mode=action_mode,
         kl_beta=kl_beta,
+        kl_warmup_epochs=kl_warmup_epochs,
         free_nats=free_nats,
+        rssm_gate_threshold=rssm_gate_threshold,
+        short_roll_horizon=rollout_horizon,
+        action_mask_prob=action_mask_prob,
         val_split=val_split,
         device=device,
         log_every=log_every,
@@ -147,7 +243,15 @@ def main():
         preload_images=preload_images,
         preload_dtype=preload_dtype,
         amp=amp,
+        reset_optimizer=bool(args.reset_optimizer),
         run_context=run_context,
+        parallel_loading=parallel_loading,
+        loading_workers=loading_workers,
+        use_action_encoder=use_action_encoder,
+        action_embed_dim=action_embed_dim,
+        contrastive_weight=contrastive_weight,
+        contrastive_margin=contrastive_margin,
+        grad_detach_schedule=grad_detach_schedule,
     )
 
     print(f"Training complete. Final model saved to {final_model_path}")
